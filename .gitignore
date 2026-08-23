@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+*.env
+
+# Google credentials
+client_secret*.json
+service_account.json
+credentials.json
+token.json
+*_credentials.json
+
+# Local data / memory
+data/
+knowledge/
+*.db
+*.sqlite
+*.sqlite3
+
+# Archives / temporary files
+*.zip
+copy
+
+# OS
+.DS_Store
+Thumbs.db
