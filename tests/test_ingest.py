@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 import ingest
@@ -5,9 +6,12 @@ import ingest
 
 class IngestTests(unittest.TestCase):
     def test_collect_files_includes_shared_drive_path(self):
-        with patch("ingest.config.SHARED_DRIVE_PATH", "C:/tmp/shared"), patch("os.walk", return_value=[("C:/tmp/shared", [], ["foo.txt"])]):
+        with patch("ingest.config.KNOWLEDGE_DIRS", []), \
+             patch("ingest.config.SHARED_DRIVE_PATH", "C:/tmp/shared"), \
+             patch("ingest.os.path.isdir", return_value=True), \
+             patch("os.walk", return_value=[("C:/tmp/shared", [], ["foo.txt"])]):
             files = ingest._collect_files()
-            self.assertEqual(files, ["C:/tmp/shared/foo.txt"])
+            self.assertEqual(files, [os.path.join("C:/tmp/shared", "foo.txt")])
 
     @patch("ingest._drive_api_available", return_value=True)
     def test_collect_files_prefixes_live_drive_results(self, _drive_available):

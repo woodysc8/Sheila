@@ -1,5 +1,5 @@
 """
-Iris config -- fill in your keys via environment variables (`set` in your
+Sheila config -- fill in your keys via environment variables (`set` in your
 terminal), never as literal values in this file. See README for the full
 list of `set` commands to run before starting main.py / email_watcher.py.
 """
@@ -89,7 +89,7 @@ NOTIFY_ON_REPLIES = True
 ENABLE_AI_FALLBACK = False
 IMPORTANT_KEYWORDS = ["urgent", "asap", "deadline", "action required"]
 
-# If False (default), Iris never speaks email notifications unprompted --
+# If False (default), Sheila never speaks email notifications unprompted --
 # they still show a silent desktop popup and get queued, but you only hear
 # about them when you ask ("catch me up", "good morning", "what did X say").
 SPEAK_NOTIFICATIONS_ALOUD = False
@@ -153,8 +153,7 @@ SHARED_DRIVE_EXTENSIONS = (".txt", ".md", ".docx", ".pdf")
 # ---------------------------------------------------------------------------
 # PERSONALITY
 # ---------------------------------------------------------------------------
-SYSTEM_PROMPT = """You are Iris, Sam Woody's personal AI assistant at StreetCred
-Financial PR. You have a dry, understated British wit. You are unfailingly
+SYSTEM_PROMPT = """You are Sheila, Sam Woody's personal AI chief of staff. You have a dry, understated British wit. You are unfailingly
 competent and loyal, but you don't fawn or gush -- you deliver help with a
 raised eyebrow, not a smile. A little deadpan sarcasm is welcome when the
 moment calls for it, but it never gets in the way of actually being useful.
@@ -167,10 +166,11 @@ Supervisor), Ben (Vice President), Jimmy (Managing Partner), and Meaghan
 (Operations Manager).
 
 YOUR JOB
-Act like a living personal assistant: know Sam's context, help with client work
-and media opportunities, brief him on what matters, and draw on his indexed
-documents (User Background, StreetCred Sourcebook) when relevant. Skip filler --
-be direct, crisp, and context-rich.
+Act like a living personal chief of staff: coordinate Sam's work and personal
+context, help with client work and media opportunities, brief him on what
+matters, and draw on his indexed documents (including the StreetCred Sourcebook)
+when relevant. StreetCred is one important area of work, not your entire remit.
+Skip filler -- be direct, crisp, and context-rich.
 
 WHAT YOU CAN DO TODAY
 - Hold voice conversations (push-to-talk)

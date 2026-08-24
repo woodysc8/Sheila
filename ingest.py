@@ -234,7 +234,7 @@ def main():
         except Exception as e:
             print(f"[ingest] Failed on {name}: {e}")
 
-    print("[ingest] Done. Iris can now reference these documents.")
+    print("[ingest] Done. Sheila can now reference these documents.")
 
 
 if __name__ == "__main__":

@@ -1,13 +1,13 @@
 """
-Decides whether Iris is allowed to interrupt you right now:
+Decides whether Sheila is allowed to interrupt you right now:
   - Quiet hours (before 7:30am or after 6pm ET)
   - Weekends (fully silent)
   - Active calendar meetings (via your calendar's public ICS feed)
-  - Manually-toggled "in a meeting" state (say "Iris, I'm in a meeting" /
-    "Iris, meeting's over" to control this -- see main.py) -- catches ad
+  - Manually-toggled "in a meeting" state (say "I'm in a meeting" /
+    "meeting's over" to control this -- see main.py) -- catches ad
     hoc calls/meetings that were never on the calendar
 
-Nothing here blocks Iris from responding when you talk to her -- it only
+Nothing here blocks Sheila from responding when you talk to her -- it only
 gates unprompted notifications (email alerts, etc).
 """
 

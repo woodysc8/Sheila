@@ -71,7 +71,7 @@ def _piper_available() -> bool:
 
 def speak(text: str):
     text = _sanitize_for_speech(text)
-    print(f"[tts] Iris: {text}")
+    print(f"[tts] Sheila: {text}")
 
     if not _piper_available():
         print("[tts] Piper not available, using fallback speech.")
@@ -115,7 +115,7 @@ def speak_fallback(text: str):
     global _fallback_engine, _fallback_call_count
     import pyttsx3
     text = _sanitize_for_speech(text)
-    print(f"[tts-fallback] Iris: {text}")
+    print(f"[tts-fallback] Sheila: {text}")
 
     _fallback_call_count += 1
     needs_fresh_engine = (

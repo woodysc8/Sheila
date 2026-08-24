@@ -1,4 +1,4 @@
-# Jarvis — Desktop Push-to-Talk Starter
+# Sheila — Desktop Push-to-Talk Assistant
 
 The simplest version: no Pi, no wake word, no Alexa hacking — just your
 computer, your professional mic, and your speaker. Hold SPACE, talk, release,
@@ -65,7 +65,7 @@ good, not before. Push-to-talk with a real mic should just work.
   `main.py` to add your own trigger words).
 
 ## Google Drive workaround (live API)
-If you already have a live Google API connection, Iris can index a shared Drive
+If you already have a live Google API connection, Sheila can index a shared Drive
 folder directly instead of relying only on a local sync folder.
 
 Set these environment variables before running the ingest step:
@@ -86,7 +86,7 @@ Then reindex:
 python ingest.py
 ```
 
-That makes Iris pull the Drive files into the same local knowledge vector store
+That makes Sheila pull the Drive files into the same local knowledge vector store
 it already uses for background questions and client context.
 
 ## What's next

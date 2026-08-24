@@ -1,5 +1,5 @@
 """
-Iris — desktop push-to-talk version.
+Sheila — desktop push-to-talk version.
 
 Loop:
   1. Hold the PTT key (see stt.py), talk, release
@@ -18,6 +18,7 @@ import tts
 import brain
 import memory
 import briefing
+from agents.workflow import handle_request
 
 REMEMBER_PHRASES = ["remember this", "remember that", "note that down", "don't forget this"]
 FORGET_PHRASES = ["forget that", "forget this", "delete that", "never mind that"]
@@ -30,6 +31,9 @@ GOOD_MORNING_PHRASES = [
     "morning iris",
     "morning, iris",
     "good morning iris",
+    "morning sheila",
+    "morning, sheila",
+    "good morning sheila",
     "morning",
     "hi iris",
     "hello iris",
@@ -73,7 +77,7 @@ def _handle_email_query() -> str:
 
 def main():
     memory.init_db()
-    print("Iris is online. If a microphone is available, hold the PTT key to talk; otherwise you can type your message. Ctrl+C to quit.")
+    print("Sheila is online. If a microphone is available, hold the PTT key to talk; otherwise you can type your message. Ctrl+C to quit.")
 
     while True:
         try:
@@ -93,7 +97,7 @@ def main():
                 continue
 
             if any(p in lowered for p in GOOD_MORNING_PHRASES):
-                if lowered in {"morning", "morning iris", "morning, iris"}:
+                if lowered in {"morning", "morning iris", "morning, iris", "morning sheila", "morning, sheila"}:
                     lowered = "good morning"
                 memory.set_meeting_status(False)  # in case it was left on overnight
                 brief = briefing.build_morning_briefing()
@@ -136,7 +140,8 @@ def main():
                 memory.log_exchange(user_text, reply)
                 continue
 
-            reply = brain.think(user_text)
+            workflow_result = handle_request(user_text, response_handler=brain.think)
+            reply = str(workflow_result["response"])
             tts.speak(reply)
 
             if any(p in lowered for p in FORGET_PHRASES):

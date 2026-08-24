@@ -1,5 +1,5 @@
 """
-Iris email watcher.
+Sheila email watcher.
 
 Primary approach: leverages your existing Gmail filters/labels via Gmail's
 native search syntax (X-GM-RAW) -- if your filters already sort important
@@ -134,7 +134,7 @@ def _notify(sender, subject, preview=""):
         print(f"[email] IMPORTANT -- silent popup: {human}")
         safe_title = human[:60] + ("…" if len(human) > 60 else "")
         try:
-            notification.notify(title="Iris", message=safe_title, timeout=15)
+            notification.notify(title="Sheila", message=safe_title, timeout=15)
         except Exception as e:
             print(f"[email] Desktop notification failed (non-fatal): {e}")
         if config.SPEAK_NOTIFICATIONS_ALOUD:

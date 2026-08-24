@@ -164,9 +164,17 @@ Current request from the user: {user_text}"""
         print("[brain] Responded via Perplexity.")
         return result
 
+    has_claude_key = (
+        bool(config.ANTHROPIC_API_KEY.strip())
+        and "PUT_YOUR" not in config.ANTHROPIC_API_KEY.upper()
+    )
+    has_perplexity_key = (
+        bool(config.PERPLEXITY_API_KEY.strip())
+        and "PUT_YOUR" not in config.PERPLEXITY_API_KEY.upper()
+    )
     if not any(
-        key and "PUT_YOUR" not in key for key in config.GEMINI_API_KEYS
-    ) and not config.ANTHROPIC_API_KEY.strip() and not config.PERPLEXITY_API_KEY.strip():
+        key and "PUT_YOUR" not in key.upper() for key in config.GEMINI_API_KEYS
+    ) and not has_claude_key and not has_perplexity_key:
         return "I’m running in offline mode right now because no valid AI keys are configured. I can still log your requests and help once the connection is available."
 
     return "I’m having trouble reaching my AI backends right now, but I’m still here and ready to help once the connection is restored."
