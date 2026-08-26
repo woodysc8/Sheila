@@ -9,10 +9,10 @@ import threading
 
 from integrations import zavu
 import config
-import main
+from sheila_handler import process_message
 
 
-HOST = "127.0.0.1"
+HOST = "0.0.0.0"
 PORT = 3002
 WEBHOOK_PATH = "/webhooks/zavu"
 _processed_events: set[str] = set()
@@ -25,7 +25,7 @@ def process_zavu_event(event: dict) -> None:
     if not inbound:
         return
     sender, text = inbound
-    response = main.process_message(text)
+    response = process_message(text)
     zavu.send_whatsapp_text(sender, response)
 
 
