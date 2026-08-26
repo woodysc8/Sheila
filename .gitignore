@@ -18,6 +18,9 @@ service_account.json
 credentials.json
 token.json
 *_credentials.json
+.gauth*
+.accounts*
+.oauth2.*.json
 
 # Local data / memory
 data/

@@ -11,6 +11,30 @@ load_dotenv()  # reads a local .env file (see .env.example) so you don't have
                 # to retype `set` commands every terminal session
 
 # ---------------------------------------------------------------------------
+# OPENAI -- the active Sheila reasoning provider
+# ---------------------------------------------------------------------------
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip().strip('"').strip("'")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini").strip().strip('"').strip("'")
+
+# Read-only Asana personal access token used by integrations.asana.
+ASANA_PAT = os.environ.get("ASANA_PAT", "").strip().strip('"').strip("'")
+
+# Zavu WhatsApp gateway. The webhook secret is supplied by Zavu when the
+# sender webhook is configured and is deliberately separate from the API key.
+ZAVU_API_KEY = os.environ.get("ZAVU_API_KEY", "").strip().strip('"').strip("'")
+ZAVU_WEBHOOK_SECRET = os.environ.get("ZAVU_WEBHOOK_SECRET", "").strip().strip('"').strip("'")
+
+
+def get_zavu_webhook_port() -> int:
+    """Return a safe local port for the optional Zavu development webhook."""
+    raw_port = os.environ.get("ZAVU_WEBHOOK_PORT", "3002").strip()
+    try:
+        port = int(raw_port)
+    except ValueError:
+        return 3002
+    return port if 1 <= port <= 65535 else 3002
+
+# ---------------------------------------------------------------------------
 # GEMINI -- https://aistudio.google.com/apikey
 # Supports multiple keys for automatic failover when one hits a quota limit.
 # Set GEMINI_API_KEYS as a comma-separated list, e.g.:
@@ -108,6 +132,13 @@ SLACK_KEYWORDS = ["urgent", "asap", "deadline"]
 # CALENDAR
 # ---------------------------------------------------------------------------
 CALENDAR_ICS_URL = os.environ.get("CALENDAR_ICS_URL", "PUT_YOUR_ICS_URL_HERE")
+
+# Authorized-user OAuth credentials used only by Sheila's read-only Google
+# integrations.  Keep the file local; it is intentionally ignored by git.
+GOOGLE_OAUTH_CREDENTIALS_FILE = os.environ.get(
+    "GOOGLE_OAUTH_CREDENTIALS_FILE",
+    os.path.join(os.path.dirname(__file__), ".oauth2.sam@streetcredpr.com.json"),
+).strip().strip('"').strip("'")
 
 # ---------------------------------------------------------------------------
 # MEMORY

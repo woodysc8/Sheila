@@ -1,118 +1,70 @@
+"""Sheila's OpenAI-only reasoning boundary.
+
+The LangGraph workflow supplies any bounded Google results as ``context``.
+This module deliberately has no provider fallback: Sheila either uses OpenAI
+or returns a clear configuration/request error.
 """
-Brain: tries Gemini keys in order, remembers dead ones so it doesn't
-waste time retrying them. Falls back to Claude, then Perplexity, if all
-Gemini keys are exhausted.
-Dead keys are remembered for 24 hours, then retried automatically.
-"""
-from google import genai
-from google.genai import types
+
 import requests
-import time
+
 import config
 import memory
-import knowledge
-
-# Tracks when each key died: {"key": timestamp}
-_dead_keys: dict[str, float] = {}
-DEAD_KEY_RETRY_SECONDS = 86400  # 24 hours
 
 
-def _key_is_dead(key: str) -> bool:
-    if key not in _dead_keys:
-        return False
-    if time.time() - _dead_keys[key] > DEAD_KEY_RETRY_SECONDS:
-        del _dead_keys[key]
-        print(f"[brain] Key ...{key[-6:]} has been dead 24h, retrying it.")
-        return False
-    return True
+OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+OPENAI_NOT_CONFIGURED = "OpenAI is not configured. Add the OpenAI API key to the environment before using Sheila."
+OPENAI_REQUEST_FAILED = "OpenAI couldn't respond right now. Check the API configuration and connection, then try again."
 
 
-def _mark_dead(key: str):
-    _dead_keys[key] = time.time()
-    print(f"[brain] Marking key ...{key[-6:]} as dead for 24 hours.")
+def _configured_api_key() -> str:
+    key = config.OPENAI_API_KEY.strip()
+    if not key or "PUT_YOUR" in key.upper():
+        return ""
+    return key
 
 
-def _try_gemini(prompt: str) -> str | None:
-    for key in config.GEMINI_API_KEYS:
-        if not key or "PUT_YOUR" in key:
-            continue
-        if _key_is_dead(key):
-            print(f"[brain] Skipping dead key ...{key[-6:]}")
-            continue
-        try:
-            client = genai.Client(api_key=key)
-            response = client.models.generate_content(
-                model=config.GEMINI_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=config.SYSTEM_PROMPT,
-                    max_output_tokens=200,
-                ),
-            )
-            return response.text.strip()
-        except Exception as e:
-            err = str(e)
-            print(f"[brain] Gemini key ...{key[-6:]} error: {err[:120]}")
-            if any(code in err for code in ["429", "RESOURCE_EXHAUSTED", "API_KEY_INVALID", "403", "400"]):
-                _mark_dead(key)
-                continue
-            raise
-    return None
+def _response_text(payload: dict) -> str:
+    """Extract text from a Responses API payload without assuming one shape."""
+    text = str(payload.get("output_text", "")).strip()
+    if text:
+        return text
+    for output in payload.get("output", []):
+        for content in output.get("content", []):
+            if content.get("type") in {"output_text", "text"}:
+                text = str(content.get("text", "")).strip()
+                if text:
+                    return text
+    return ""
 
 
-def _try_perplexity(prompt: str) -> str | None:
-    key = config.PERPLEXITY_API_KEY
-    if not key or "PUT_YOUR" in key:
-        return None
+def _ask_openai(prompt: str) -> str:
+    key = _configured_api_key()
+    if not key:
+        return OPENAI_NOT_CONFIGURED
     try:
-        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-        body = {
-            "model": "sonar",
-            "messages": [
-                {"role": "system", "content": config.SYSTEM_PROMPT + "\n\nIMPORTANT: The user's message includes conversation history and personal context above the actual question. Prioritize that context over doing a fresh web search -- only search the web if the context genuinely doesn't answer the question. Do not include citation brackets like [1] in your response."},
-                {"role": "user", "content": prompt},
-            ],
-        }
-        r = requests.post("https://api.perplexity.ai/chat/completions", headers=headers, json=body, timeout=30)
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"[brain] Perplexity failed: {e}")
-        return None
-
-
-def _try_claude(prompt: str) -> str | None:
-    key = config.ANTHROPIC_API_KEY
-    if not key or "PUT_YOUR" in key:
-        return None
-    if not key.startswith("sk-ant-"):
-        print("[brain] Claude key does not look like an Anthropic key; skipping.")
-        return None
-    try:
-        headers = {
-            "x-api-key": key,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "model": "claude-3-5-haiku-20241022",
-            "max_tokens": 400,
-            "system": config.SYSTEM_PROMPT[:1200],
-            "messages": [{"role": "user", "content": prompt[:1200]}],
-        }
-        r = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=body, timeout=30)
-        r.raise_for_status()
-        return r.json()["content"][0]["text"].strip()
-    except Exception as e:
-        print(f"[brain] Claude failed: {e}")
-        return None
+        response = requests.post(
+            OPENAI_RESPONSES_URL,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={
+                "model": config.OPENAI_MODEL,
+                "instructions": config.SYSTEM_PROMPT,
+                "input": prompt,
+                "max_output_tokens": 400,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        return _response_text(response.json()) or OPENAI_REQUEST_FAILED
+    except requests.RequestException as exc:
+        print(f"[brain] OpenAI request failed: {exc}")
+        return OPENAI_REQUEST_FAILED
+    except (TypeError, ValueError, KeyError) as exc:
+        print(f"[brain] OpenAI response could not be read: {exc}")
+        return OPENAI_REQUEST_FAILED
 
 
 def summarize_message(sender_name: str, context_label: str, body: str) -> str:
-    """One-off summarization for 'what did X say' follow-ups (works for both
-    email and Slack). Uses the same fallback chain as think(), but a focused
-    prompt instead of full memory context -- this is a deliberate,
-    user-initiated call, not part of the zero-cost polling paths."""
+    """Summarize a user-requested message with the same OpenAI-only provider."""
     prompt = f"""Summarize this message in 2-3 short spoken sentences, as if
 telling the user what it says. Be direct and conversational, no preamble.
 
@@ -120,61 +72,31 @@ From: {sender_name}
 Context: {context_label}
 Content: {body[:1500]}
 """
-    result = _try_gemini(prompt)
-    if result:
-        return result
-    result = _try_claude(prompt)
-    if result:
-        return result
-    result = _try_perplexity(prompt)
-    if result:
-        return result
-    return f"I have the message from {sender_name} logged, but couldn't summarize it right now."
+    return _ask_openai(prompt)
 
 
-def think(user_text: str) -> str:
-    context = memory.get_context(current_query=user_text)
+def think(user_text: str, context: str = "") -> str:
+    """Use OpenAI to respond while preserving the established call signature."""
+    memory_context = memory.get_context(current_query=user_text)
     pending = memory.get_pending_notifications()
     if pending:
-        context = f"{context}\n\nPending notifications:\n" + "\n".join(
+        memory_context = f"{memory_context}\n\nPending notifications:\n" + "\n".join(
             f"- [{ts}] {source}: {summary}" for ts, source, summary in pending
         )
-    doc_context = knowledge.query(user_text)
-    prompt = f"""Context from memory:
-{context}
+    prompt = f"""Source-grounding rules:
+- Treat source labels as evidence boundaries, not permission to invent facts.
+- When an integration result is supplied, it is the source of truth for factual claims about that service. Never invent or contradict records, and never claim zero results when the labeled results contain records.
+- For calendar-only questions, [CALENDAR RESULTS] is authoritative for its stated range: describe only its events, preserve their exact dates/times, and do not present Gmail, Drive, memory, or general knowledge as calendar events.
+- Never use old memory as a substitute for current API results. Clearly distinguish an unavailable integration from a successful zero-result query.
+- A Drive document mention or folder association does not prove a company is a client, account, or customer. State that evidence is insufficient unless the retrieved Drive text explicitly identifies that relationship.
+- Do not describe old Gmail results as current or recent. Preserve retrieved dates exactly when available.
+- If evidence is insufficient, say so plainly. Do not infer missing relationships, dates, or events.
 
-Relevant information from your documents (User Background, StreetCred Sourcebook, etc.):
-{doc_context if doc_context else "Nothing relevant found in your documents."}
+Context from memory:
+{memory_context}
+
+Read-only information retrieved for this request:
+{context if context else "No external information was retrieved."}
 
 Current request from the user: {user_text}"""
-
-    result = _try_gemini(prompt)
-    if result:
-        return result
-
-    print("[brain] All Gemini keys exhausted, trying Claude...")
-    result = _try_claude(prompt)
-    if result:
-        print("[brain] Responded via Claude.")
-        return result
-
-    print("[brain] Claude failed, trying Perplexity...")
-    result = _try_perplexity(prompt)
-    if result:
-        print("[brain] Responded via Perplexity.")
-        return result
-
-    has_claude_key = (
-        bool(config.ANTHROPIC_API_KEY.strip())
-        and "PUT_YOUR" not in config.ANTHROPIC_API_KEY.upper()
-    )
-    has_perplexity_key = (
-        bool(config.PERPLEXITY_API_KEY.strip())
-        and "PUT_YOUR" not in config.PERPLEXITY_API_KEY.upper()
-    )
-    if not any(
-        key and "PUT_YOUR" not in key.upper() for key in config.GEMINI_API_KEYS
-    ) and not has_claude_key and not has_perplexity_key:
-        return "I’m running in offline mode right now because no valid AI keys are configured. I can still log your requests and help once the connection is available."
-
-    return "I’m having trouble reaching my AI backends right now, but I’m still here and ready to help once the connection is restored."
+    return _ask_openai(prompt)

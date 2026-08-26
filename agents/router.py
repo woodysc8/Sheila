@@ -5,6 +5,7 @@ model client or attempt to call planned agents.
 """
 
 from dataclasses import asdict, dataclass
+import re
 
 
 @dataclass(frozen=True)
@@ -13,6 +14,7 @@ class RoutingDecision:
     intent: str
     delegation_ready: bool
     reason: str
+    capability: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -31,6 +33,14 @@ RESEARCH_TERMS = (
     "research", "deep research", "research report", "analyze",
     "analysis", "compare", "presentation", "briefing deck", "market study",
 )
+GMAIL_TERMS = ("email", "emails", "mail", "inbox", "gmail")
+CALENDAR_TERMS = ("calendar", "meeting", "meetings", "agenda", "when am i free", "when i'm free", "am i free")
+DRIVE_TERMS = ("drive", "document", "documents", "file", "files", "folder")
+ASANA_TERMS = ("asana", "overdue tasks", "what's overdue", "what is overdue", "show me my overdue tasks")
+FREE_TIME_PATTERN = re.compile(r"\bfree\b.*\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|afternoon|evening|today|tomorrow)\b")
+GMAIL_FOLLOWUP_PATTERN = re.compile(r"\bwhat did\s+[\w .'-]+\s+say\??$")
+DRIVE_RELATIONSHIP_PATTERN = re.compile(r"\b(?:which|what|who)\b.*\bclients?\b|\bcompanies\s+are\s+clients\b|\b(?:does|do)\b.*\bserve\b")
+ASANA_TASK_PATTERN = re.compile(r"\bwhat\s+(?:tasks?|do i)\b.*\bdue\s+today\b|\bwhat\s+do\s+i\s+have\s+due\s+today\b")
 
 
 def _matches(text: str, terms: tuple[str, ...]) -> bool:
@@ -44,6 +54,15 @@ def route_request(user_text: str) -> RoutingDecision:
     can preserve a safe Sheila fallback until those implementations exist.
     """
     normalized = user_text.lower()
+    if _matches(normalized, ASANA_TERMS) or ASANA_TASK_PATTERN.search(normalized):
+        return RoutingDecision("Sheila", "asana_read", False, "This request needs read-only Asana data.", "asana")
+    # Google data is a Sheila capability, not a separate personality agent.
+    if _matches(normalized, GMAIL_TERMS) or GMAIL_FOLLOWUP_PATTERN.search(normalized):
+        return RoutingDecision("Sheila", "gmail_read", False, "This request needs read-only Gmail data.", "gmail")
+    if _matches(normalized, CALENDAR_TERMS) or FREE_TIME_PATTERN.search(normalized):
+        return RoutingDecision("Sheila", "calendar_read", False, "This request needs read-only Google Calendar data.", "calendar")
+    if _matches(normalized, DRIVE_TERMS) or DRIVE_RELATIONSHIP_PATTERN.search(normalized):
+        return RoutingDecision("Sheila", "drive_read", False, "This request needs read-only Google Drive data.", "drive")
     if _matches(normalized, FINANCIAL_TERMS):
         return RoutingDecision(
             agent="Richard",

@@ -1,194 +1,239 @@
-import os
+"""Fact-grounded Morning Protocol v2 over Sheila's canonical integrations."""
+
+from datetime import date, datetime, time, timedelta
+from email.utils import parsedate_to_datetime
 import re
+
 import requests
-from icalendar import Calendar
-import config
+
+from integrations import asana, calendar, gmail
+from integrations.google_auth import GoogleAuthError
 import memory
 
 
-def _summarize_with_ai(text: str) -> str | None:
+def _today_range(now: datetime | None = None) -> tuple[datetime, datetime]:
+    local_now = now or datetime.now().astimezone()
+    start = datetime.combine(local_now.date(), time.min, tzinfo=local_now.tzinfo)
+    return start, start + timedelta(days=1)
+
+
+def _gmail_date_query(start: datetime, end: datetime, extra: str = "") -> str:
+    return f"{extra} after:{start:%Y/%m/%d} before:{end:%Y/%m/%d}".strip()
+
+
+def get_todays_gmail_messages(now: datetime | None = None) -> list[dict[str, str]]:
+    start, end = _today_range(now)
+    return gmail.search_messages(_gmail_date_query(start, end, "in:inbox"), limit=10)
+
+
+def get_todays_calendar_events(now: datetime | None = None) -> list[dict[str, str]]:
+    start, end = _today_range(now)
+    return calendar.get_events(start, end, limit=20)
+
+
+def _event_datetime(value: str) -> datetime | None:
     try:
-        from google import genai
-        from google.genai import types
-    except Exception:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
         return None
 
-    api_keys = [k for k in config.GEMINI_API_KEYS if k and "PUT_YOUR" not in k]
-    for key in api_keys:
+
+def _format_event(event: dict[str, str]) -> tuple[str, datetime | None]:
+    title = event.get("title", "(untitled event)")
+    location = f" ({event['location']})" if event.get("location") else ""
+    start_value = event.get("start", "")
+    start_at, end_at = _event_datetime(start_value), _event_datetime(event.get("end", ""))
+    if len(start_value) == 10 or not start_at:
+        return f"- All day: {title}{location}", None
+    local_start = start_at.astimezone()
+    local_end = end_at.astimezone() if end_at else None
+    end_text = local_end.strftime("%I:%M %p").lstrip("0") if local_end else ""
+    return f"- {local_start.strftime('%I:%M %p').lstrip('0')}–{end_text}: {title}{location}", local_start
+
+
+def _task_due_date(task: dict[str, object]) -> date | None:
+    due_on = task.get("due_on")
+    if isinstance(due_on, str) and due_on:
         try:
-            client = genai.Client(api_key=key)
-            response = client.models.generate_content(
-                model=config.GEMINI_MODEL,
-                contents=f"Summarize the following morning briefing content in 3 short spoken sentences:\n\n{text}",
-                config=types.GenerateContentConfig(max_output_tokens=180),
-            )
-            return response.text.strip()
-        except Exception:
-            continue
+            return date.fromisoformat(due_on)
+        except ValueError:
+            return None
+    due_at = task.get("due_at")
+    if isinstance(due_at, str) and due_at:
+        try:
+            return datetime.fromisoformat(due_at.replace("Z", "+00:00")).astimezone().date()
+        except ValueError:
+            return None
     return None
 
 
-def get_asana_overdue_tasks() -> list[str]:
-    token = os.environ.get("ASANA_PAT", "").strip()
-    if not token or "PUT_YOUR" in token.upper():
-        return []
-
-    headers = {"Authorization": f"Bearer {token}"}
-    urls = [
-        "https://app.asana.com/api/1.0/tasks?assignee=me&completed_since=now&opt_fields=name",
-        "https://app.asana.com/api/1.0/tasks?assignee=me&opt_fields=name",
-    ]
-
-    for url in urls:
-        try:
-            r = requests.get(url, headers=headers, timeout=20)
-            if r.status_code != 200:
-                continue
-            tasks = []
-            for item in r.json().get("data", []):
-                if item.get("name"):
-                    tasks.append(item["name"])
-            return tasks[:8]
-        except Exception:
-            continue
-
-    return []
+def _tasks_due_on(tasks: list[dict[str, object]], target_date: date) -> list[dict[str, object]]:
+    return [task for task in tasks if not task.get("completed") and _task_due_date(task) == target_date]
 
 
-def get_todays_calendar_events() -> list[str]:
-    ics_url = os.environ.get("CALENDAR_ICS_URL", config.CALENDAR_ICS_URL).strip()
-    if not ics_url or "PUT_YOUR" in ics_url:
-        fallback_email = config.EMAIL_ADDRESS.strip()
-        if "@" in fallback_email:
-            ics_url = f"https://calendar.google.com/calendar/ical/{fallback_email}/public/basic.ics"
-        else:
-            return []
+def _format_task(task: dict[str, object]) -> str:
+    due = task.get("due_on") or task.get("due_at")
+    project = f" — {task['project']}" if task.get("project") else ""
+    return f"- {task.get('name', '(unnamed task)')} (due {due}){project}"
 
-    ics_url = ics_url.replace("/basic.i", "/basic.ics")
-    if "public/basic.ics" not in ics_url and "calendar/ical/" in ics_url:
-        ics_url = ics_url.rstrip("/") + "/public/basic.ics"
 
+def _format_email(message: dict[str, str]) -> str:
+    return f"- From: {message.get('sender', '')} | Subject: {message.get('subject', '(no subject)')} | Date: {message.get('date', '')}"
+
+
+def _message_local_date(message: dict[str, str]) -> date | None:
     try:
-        r = requests.get(ics_url, timeout=20)
-        if r.status_code != 200:
-            return []
-        cal = Calendar.from_ical(r.text)
-        events = []
-        for component in cal.walk("VEVENT"):
-            summary = str(component.get("summary", ""))
-            if summary:
-                events.append(summary)
-        return events[:8]
-    except Exception:
-        return []
+        return parsedate_to_datetime(message.get("date", "")).astimezone().date()
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def _is_morning_brew(message: dict[str, str]) -> bool:
+    haystack = " ".join((message.get("sender", ""), message.get("subject", ""))).lower()
+    return "morning brew" in haystack or "morningbrew.com" in haystack
+
+
+def select_current_morning_brew(messages: list[dict[str, str]], current_date: date) -> dict[str, str] | None:
+    """Select only an edition whose message date is today; never reuse old mail."""
+    return next((message for message in messages if _is_morning_brew(message) and _message_local_date(message) == current_date), None)
+
+
+def get_current_morning_brew(now: datetime | None = None) -> dict[str, str] | None:
+    start, end = _today_range(now)
+    query = _gmail_date_query(start, end, "(from:morningbrew.com OR subject:\"Morning Brew\")")
+    return select_current_morning_brew(gmail.search_messages(query, limit=5), start.date())
+
+
+def _market_holidays(year: int) -> set[date]:
+    """NYSE full-day closure dates using US market holiday rules for this year."""
+    def observed(day: date) -> date:
+        return day - timedelta(days=1) if day.weekday() == 5 else day + timedelta(days=1) if day.weekday() == 6 else day
+
+    def nth_weekday(month: int, weekday: int, nth: int) -> date:
+        day = date(year, month, 1)
+        return day + timedelta(days=(weekday - day.weekday()) % 7 + 7 * (nth - 1))
+
+    def last_weekday(month: int, weekday: int) -> date:
+        day = date(year, month + 1, 1) - timedelta(days=1) if month < 12 else date(year, 12, 31)
+        return day - timedelta(days=(day.weekday() - weekday) % 7)
+
+    a, b = year % 19, year // 100
+    c, d, e = year % 100, b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    easter = date(year, (h + l - 7 * m + 114) // 31, (h + l - 7 * m + 114) % 31 + 1)
+    return {
+        observed(date(year, 1, 1)), nth_weekday(1, 0, 3), nth_weekday(2, 0, 3), easter - timedelta(days=2),
+        last_weekday(5, 0), observed(date(year, 6, 19)), observed(date(year, 7, 4)), nth_weekday(9, 0, 1),
+        nth_weekday(11, 3, 4), observed(date(year, 12, 25)),
+    }
+
+
+def is_us_market_holiday(day: date) -> bool:
+    return day in _market_holidays(day.year)
+
+
+def _market_value(text: str, labels: tuple[str, ...]) -> str | None:
+    label = "(?:" + "|".join(re.escape(item) for item in labels) + ")"
+    match = re.search(rf"\b{label}\b[^\n.]*?(?:[+-]?\d+(?:\.\d+)?%)", text, re.IGNORECASE)
+    return match.group(0).strip() if match else None
+
+
+def _market_lines(message: dict[str, str], current_date: date) -> list[str]:
+    if current_date.weekday() >= 5:
+        return ["- Weekend: no market briefing is included without a current relevant edition."]
+    if is_us_market_holiday(current_date):
+        return ["- U.S. markets are closed today; no normal previous-session market move is presented."]
+    text = "\n".join((message.get("subject", ""), message.get("snippet", ""), message.get("body", "")))
+    lines: list[str] = []
+    for title, labels in (("S&P 500", ("S&P 500", "S&P")), ("Nasdaq Composite", ("Nasdaq Composite", "Nasdaq")), ("Dow Jones Industrial Average", ("Dow Jones", "Dow"))):
+        value = _market_value(text, labels)
+        lines.append(f"- {title}: {value}" if value else f"- {title}: not found in today's edition.")
+    why = next((line.strip() for line in text.splitlines() if re.search(r"\b(?:because|as .*?(?:investors|markets)|after .*?(?:investors|markets))\b", line, re.I)), None)
+    lines.append(f"- Why: {why}" if why else "- Why: not found in today's edition.")
+    return lines
 
 
 def get_weather_summary() -> str:
     try:
-        r = requests.get("https://wttr.in/Providence,RI?format=j1", timeout=20)
-        r.raise_for_status()
-        data = r.json()
-        current = data.get("current_condition", [{}])[0]
-        temp_f = int(float(current.get("temp_F", 0)))
-        weather_desc = current.get("weatherDesc", [{}])[0].get("value", "unclear")
-        if "rain" in weather_desc.lower():
-            return f"Providence is {weather_desc.lower()}, high around {temp_f}°F, with a chance of rain later."
-        return f"Providence is {weather_desc.lower()}, high around {temp_f}°F."
-    except Exception as e:
-        print(f"[briefing] Weather lookup failed: {e}")
+        response = requests.get("https://wttr.in/Providence,RI?format=j1", timeout=20)
+        response.raise_for_status()
+        payload = response.json()
+        current = payload.get("current_condition", [{}])[0]
+        forecast = payload.get("weather", [{}])[0]
+        description = current.get("weatherDesc", [{}])[0].get("value", "unclear").lower()
+        current_f, high_f = current.get("temp_F", "?"), forecast.get("maxtempF", "?")
+        rain = forecast.get("hourly", [{}])[0].get("chanceofrain", "")
+        precipitation = f", {rain}% chance of rain" if rain and rain != "0" else ""
+        return f"Providence: {description}, {current_f}°F now; high {high_f}°F{precipitation}."
+    except requests.RequestException as exc:
+        print(f"[briefing] Weather lookup failed: {exc}")
+        return "Weather unavailable."
+    except (TypeError, ValueError, KeyError, IndexError) as exc:
+        print(f"[briefing] Weather response invalid: {exc}")
         return "Weather unavailable."
 
 
-def _extract_market_threads(text: str) -> list[str]:
-    lines = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if len(line) > 40 or "morning brew" in line.lower() or "market" in line.lower():
-            lines.append(line)
-    return lines[:6]
+def build_morning_briefing(now: datetime | None = None) -> str:
+    """Build a deterministic information brief; integrations determine all facts."""
+    start, _end = _today_range(now)
+    today = start.date()
+    parts = [f"Morning briefing for {today.isoformat()}."]
 
+    parts.append("\nCalendar today:")
+    try:
+        events = get_todays_calendar_events(start)
+        parts.append(f"- {len(events)} event(s)")
+        timed: list[tuple[datetime, str]] = []
+        for event in events:
+            line, event_start = _format_event(event)
+            parts.append(line)
+            if event_start:
+                timed.append((event_start, event.get("title", "(untitled event)")))
+        if timed:
+            first_start, first_title = min(timed, key=lambda item: item[0])
+            parts.append(f"First meeting: {first_start.strftime('%I:%M %p').lstrip('0')} — {first_title}.")
+    except GoogleAuthError:
+        parts.append("- Google Calendar isn't available right now.")
 
-def _get_morning_brew_digest() -> str:
-    recent = memory.get_pending_notifications()
-    if not recent:
-        return ""
-    entries = []
-    for _, source, summary in recent:
-        if "brew" in source.lower() or "market" in summary.lower() or "morning brew" in summary.lower():
-            entries.append(summary)
-    return "\n".join(entries)
+    parts.append("\nAsana:")
+    try:
+        overdue = asana.get_overdue_tasks(limit=20, current_date=today)
+        tasks = asana.get_tasks(limit=20)
+        task_groups = (
+            ("Overdue tasks", overdue, "No overdue tasks found."),
+            ("Tasks due today", _tasks_due_on(tasks, today), "No tasks due today."),
+            ("Tasks due tomorrow", _tasks_due_on(tasks, today + timedelta(days=1)), "No tasks due tomorrow."),
+        )
+        for label, matching, empty in task_groups:
+            parts.append(f"- {label}: {len(matching)}")
+            parts.extend(_format_task(task) for task in matching) if matching else parts.append(f"  {empty}")
+    except asana.AsanaError:
+        parts.append("- Unable to retrieve Asana right now.")
 
+    parts.append("\nInbox:")
+    try:
+        messages = get_todays_gmail_messages(start)
+        inbox_messages = [message for message in messages if not _is_morning_brew(message)]
+        parts.extend(_format_email(message) for message in inbox_messages) if inbox_messages else parts.append("- No non-Morning Brew messages found for today.")
+    except GoogleAuthError:
+        parts.append("- Google email isn't available right now.")
 
-def _thread_key_from_summary(summary: str) -> str:
-    match = re.search(r"in the (.+?) thread", summary, flags=re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-    return summary.strip()
+    parts.append("\nMorning Brew / Markets:")
+    try:
+        edition = get_current_morning_brew(start)
+        parts.extend(_market_lines(edition, today) if edition else ["- Today's edition was not found in the inbox, so I don't have verified market figures from it."])
+    except GoogleAuthError:
+        parts.append("- Gmail isn't available, so Morning Brew market figures could not be verified.")
 
-
-def _group_emails_by_thread(items: list[tuple]) -> list[str]:
-    grouped: dict[str, list[str]] = {}
-    for _, source, summary in items:
-        if source.lower() != "email":
-            continue
-        thread_key = _thread_key_from_summary(summary)
-        grouped.setdefault(thread_key, []).append(summary)
-
-    lines = []
-    for thread, entries in grouped.items():
-        unique_entries = []
-        for entry in entries:
-            if entry not in unique_entries:
-                unique_entries.append(entry)
-        lines.append(f"- {thread}: {', '.join(unique_entries[:3])}")
-    return lines[:8]
-
-
-def build_morning_briefing() -> str:
-    pending = memory.get_pending_notifications()
-    email_items = [(ts, source, summary) for ts, source, summary in pending if source.lower() == "email"]
-    market_lines = _extract_market_threads(_get_morning_brew_digest())
-
-    asana_tasks = get_asana_overdue_tasks()
-    calendar_events = get_todays_calendar_events()
-    weather = get_weather_summary()
-
-    parts = []
-    parts.append("Recent email activity since your last check:")
-    if email_items:
-        parts.extend(_group_emails_by_thread(email_items))
-    else:
-        parts.append("- No recent email activity recorded yet.")
-
-    parts.append("\nOverdue Asana tasks:")
-    if asana_tasks:
-        parts.extend([f"- {task}" for task in asana_tasks])
-    else:
-        parts.append("- No overdue Asana tasks.")
-
-    parts.append("\nToday's calendar events:")
-    if calendar_events:
-        parts.extend([f"- {event}" for event in calendar_events])
-    else:
-        parts.append("- No calendar events found.")
-
-    parts.append(f"\nWeather: {weather}")
-
-    if market_lines:
-        parts.append("\nMorning Brew / market threads:")
-        parts.extend([f"- {line}" for line in market_lines])
-    else:
-        parts.append("\nMorning Brew / market threads: none detected.")
-
+    parts.append(f"\nWeather:\n- {get_weather_summary()}")
+    parts.append("\nThat's the morning update. What would you like to work on?")
     memory.mark_notifications_delivered()
-    body = "\n".join(parts)
-    ai_summary = _summarize_with_ai(body)
-    if ai_summary:
-        return ai_summary
-
-    return body
+    return "\n".join(parts)
 
 
 if __name__ == "__main__":
