@@ -26,8 +26,15 @@ ZAVU_WEBHOOK_SECRET = os.environ.get("ZAVU_WEBHOOK_SECRET", "").strip().strip('"
 
 
 def get_zavu_webhook_port() -> int:
-    """Return a safe local port for the optional Zavu development webhook."""
-    raw_port = os.environ.get("ZAVU_WEBHOOK_PORT", "3002").strip()
+    """Return a safe port for the Zavu webhook in local and hosted environments.
+
+    Render supplies its assigned listening port in ``PORT``.  Local development
+    can continue to select a port with ``ZAVU_WEBHOOK_PORT``.
+    """
+    raw_port = os.environ.get("PORT")
+    if raw_port is None:
+        raw_port = os.environ.get("ZAVU_WEBHOOK_PORT", "3002")
+    raw_port = raw_port.strip()
     try:
         port = int(raw_port)
     except ValueError:

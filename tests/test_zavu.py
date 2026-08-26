@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from integrations import zavu
 import zavu_webhook
+import sheila_handler
 
 
 SECRET = "whsec_test_secret"
@@ -28,12 +29,25 @@ def _event(text: str = "What is due today in Asana?") -> dict:
 
 
 class ZavuIntegrationTests(unittest.TestCase):
-    def test_webhook_port_defaults_to_3002_and_honors_environment_override(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("ZAVU_WEBHOOK_PORT", None)
+    def test_webhook_port_defaults_to_3002(self):
+        with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(zavu_webhook.config.get_zavu_webhook_port(), 3002)
-        with patch.dict(os.environ, {"ZAVU_WEBHOOK_PORT": "3017"}, clear=False):
+
+    def test_webhook_port_honors_local_zavu_override(self):
+        with patch.dict(os.environ, {"ZAVU_WEBHOOK_PORT": "3017"}, clear=True):
             self.assertEqual(zavu_webhook.config.get_zavu_webhook_port(), 3017)
+
+    def test_webhook_port_honors_render_port_override(self):
+        with patch.dict(os.environ, {"PORT": "10000"}, clear=True):
+            self.assertEqual(zavu_webhook.config.get_zavu_webhook_port(), 10000)
+
+    def test_render_port_takes_precedence_over_local_zavu_override(self):
+        with patch.dict(os.environ, {"PORT": "10000", "ZAVU_WEBHOOK_PORT": "3017"}, clear=True):
+            self.assertEqual(zavu_webhook.config.get_zavu_webhook_port(), 10000)
+
+    def test_invalid_webhook_port_falls_back_to_3002(self):
+        with patch.dict(os.environ, {"PORT": "not-a-port", "ZAVU_WEBHOOK_PORT": "3017"}, clear=True):
+            self.assertEqual(zavu_webhook.config.get_zavu_webhook_port(), 3002)
 
     def test_run_server_binds_the_configured_port(self):
         server = unittest.mock.Mock()
@@ -43,7 +57,7 @@ class ZavuIntegrationTests(unittest.TestCase):
              patch.object(zavu_webhook, "ThreadingHTTPServer", return_value=server) as http_server:
             with self.assertRaisesRegex(RuntimeError, "stop test server"):
                 zavu_webhook.run_server()
-        http_server.assert_called_once_with(("127.0.0.1", 3017), zavu_webhook.ZavuWebhookHandler)
+        http_server.assert_called_once_with(("0.0.0.0", 3017), zavu_webhook.ZavuWebhookHandler)
 
     def test_missing_api_key_fails_without_leaking_a_value(self):
         with patch.object(zavu.config, "ZAVU_API_KEY", ""):
@@ -77,11 +91,14 @@ class ZavuIntegrationTests(unittest.TestCase):
         self.assertFalse(zavu.verify_webhook_signature(body + b"x", header, SECRET, now=timestamp))
 
     def test_inbound_message_uses_existing_sheila_handler_then_zavu(self):
-        with patch.object(zavu_webhook.main, "process_message", return_value="[ASANA RESULTS]\nTask A") as process, \
+        with patch.object(zavu_webhook, "process_message", return_value="[ASANA RESULTS]\nTask A") as process, \
              patch.object(zavu_webhook.zavu, "send_whatsapp_text") as send:
             zavu_webhook.process_zavu_event(_event())
         process.assert_called_once_with("What is due today in Asana?")
         send.assert_called_once_with("+14155551234", "[ASANA RESULTS]\nTask A")
+
+    def test_whatsapp_adapter_uses_the_same_shared_handler_as_terminal(self):
+        self.assertIs(zavu_webhook.process_message, sheila_handler.process_message)
 
     def test_signed_local_webhook_acknowledges_and_dispatches(self):
         zavu_webhook._processed_events.clear()
@@ -103,6 +120,32 @@ class ZavuIntegrationTests(unittest.TestCase):
                 time.sleep(0.01)
         server.server_close()
         self.assertEqual(response.status, 200)
+        process.assert_called_once_with(_event())
+
+    def test_duplicate_signed_event_is_acknowledged_without_second_dispatch(self):
+        zavu_webhook._processed_events.clear()
+        server = zavu_webhook.ThreadingHTTPServer(("127.0.0.1", 0), zavu_webhook.ZavuWebhookHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        body = json.dumps(_event(), separators=(",", ":")).encode()
+        timestamp = int(time.time())
+        headers = {"Content-Type": "application/json", "X-Zavu-Signature": _signature(body, timestamp)}
+        with patch.object(zavu_webhook.zavu, "webhook_secret", return_value=SECRET), \
+             patch.object(zavu_webhook, "process_zavu_event") as process:
+            thread.start()
+            for _ in range(2):
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1])
+                connection.request("POST", "/webhooks/zavu", body=body, headers=headers)
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 200)
+                connection.close()
+            for _ in range(20):
+                if process.called:
+                    break
+                time.sleep(0.01)
+        server.shutdown()
+        thread.join(timeout=1)
+        server.server_close()
         process.assert_called_once_with(_event())
 
 
