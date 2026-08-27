@@ -19,14 +19,28 @@ _processed_events: set[str] = set()
 _processed_lock = threading.Lock()
 
 
+def _log(message: str) -> None:
+    """Emit redacted lifecycle diagnostics suitable for hosted-service logs."""
+    print(f"[zavu] {message}", flush=True)
+
+
 def process_zavu_event(event: dict) -> None:
     """Send only verified inbound WhatsApp text through Sheila's existing handler."""
     inbound = zavu.extract_inbound_text_event(event)
     if not inbound:
+        _log("Event did not pass the inbound WhatsApp text extraction check")
         return
+
     sender, text = inbound
+    _log("Event passed the inbound WhatsApp text extraction check")
+
+    _log("Sheila process_message started")
     response = process_message(text)
+    _log("Sheila process_message completed successfully")
+
+    _log("Zavu outbound send started")
     zavu.send_whatsapp_text(sender, response)
+    _log("Zavu outbound send completed successfully")
 
 
 class ZavuWebhookHandler(BaseHTTPRequestHandler):
@@ -53,6 +67,7 @@ class ZavuWebhookHandler(BaseHTTPRequestHandler):
         if not zavu.verify_webhook_signature(raw_body, self.headers.get("X-Zavu-Signature", ""), secret):
             self.send_error(401, "Invalid signature")
             return
+        _log("Verified inbound webhook received")
         try:
             event = json.loads(raw_body)
         except (TypeError, ValueError):
@@ -64,11 +79,13 @@ class ZavuWebhookHandler(BaseHTTPRequestHandler):
             return
         with _processed_lock:
             if event_id in _processed_events:
+                _log("Event was already accepted; acknowledging duplicate")
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b"OK")
                 return
             _processed_events.add(event_id)
+        _log("Event accepted for background processing")
         # Zavu requires a 2xx acknowledgement within 30 seconds. Process after
         # acknowledgement to avoid retrying a valid event while OpenAI is busy.
         self.send_response(200)
@@ -79,11 +96,12 @@ class ZavuWebhookHandler(BaseHTTPRequestHandler):
 
 def _process_safely(event: dict) -> None:
     try:
+        _log("Background processing started")
         process_zavu_event(event)
     except zavu.ZavuError as exc:
-        print(f"[zavu] WhatsApp response could not be delivered: {exc}")
+        _log(f"Background processing failed during Zavu delivery ({type(exc).__name__}); no message data logged")
     except Exception as exc:
-        print(f"[zavu] Inbound message handling failed: {type(exc).__name__}")
+        _log(f"Background processing failed ({type(exc).__name__}); no message data logged")
 
 
 def run_server(host: str = HOST, port: int | None = None) -> None:

@@ -92,10 +92,32 @@ class ZavuIntegrationTests(unittest.TestCase):
 
     def test_inbound_message_uses_existing_sheila_handler_then_zavu(self):
         with patch.object(zavu_webhook, "process_message", return_value="[ASANA RESULTS]\nTask A") as process, \
-             patch.object(zavu_webhook.zavu, "send_whatsapp_text") as send:
+             patch.object(zavu_webhook.zavu, "send_whatsapp_text") as send, \
+             patch.object(zavu_webhook, "_log") as log:
             zavu_webhook.process_zavu_event(_event())
         process.assert_called_once_with("What is due today in Asana?")
         send.assert_called_once_with("+14155551234", "[ASANA RESULTS]\nTask A")
+        self.assertEqual(
+            [call.args[0] for call in log.call_args_list],
+            [
+                "Event passed the inbound WhatsApp text extraction check",
+                "Sheila process_message started",
+                "Sheila process_message completed successfully",
+                "Zavu outbound send started",
+                "Zavu outbound send completed successfully",
+            ],
+        )
+
+    def test_background_processing_failure_log_is_redacted(self):
+        sensitive_error = RuntimeError("message content +14155551234 whsec_secret")
+        with patch.object(zavu_webhook, "process_zavu_event", side_effect=sensitive_error), \
+             patch.object(zavu_webhook, "_log") as log:
+            zavu_webhook._process_safely(_event())
+        messages = [call.args[0] for call in log.call_args_list]
+        self.assertEqual(messages[0], "Background processing started")
+        self.assertEqual(messages[1], "Background processing failed (RuntimeError); no message data logged")
+        self.assertNotIn("+14155551234", messages[1])
+        self.assertNotIn("whsec_secret", messages[1])
 
     def test_whatsapp_adapter_uses_the_same_shared_handler_as_terminal(self):
         self.assertIs(zavu_webhook.process_message, sheila_handler.process_message)
