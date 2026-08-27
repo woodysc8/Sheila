@@ -23,6 +23,19 @@ def _api_key() -> str:
     return config.ZAVU_API_KEY
 
 
+def _log_outbound_response(status_code: int, payload: object, json_parsed: bool) -> None:
+    """Log only non-sensitive metadata about Zavu's outbound API response."""
+    top_level_keys = sorted(payload) if isinstance(payload, dict) else []
+    accepted = 200 <= status_code < 300
+    print(
+        "[zavu] Outbound response "
+        f"http_status={status_code}; json_parsed={'yes' if json_parsed else 'no'}; "
+        f"top_level_keys={','.join(top_level_keys) or 'none'}; "
+        f"Zavu accepted request={'yes' if accepted else 'no'}",
+        flush=True,
+    )
+
+
 def send_whatsapp_text(recipient: str, text: str) -> dict:
     """Queue one WhatsApp text response through Zavu's documented API."""
     if not recipient or not text.strip():
@@ -34,10 +47,17 @@ def send_whatsapp_text(recipient: str, text: str) -> dict:
             json={"to": recipient, "channel": "whatsapp", "messageType": "text", "text": text},
             timeout=20,
         )
+        try:
+            payload = response.json()
+        except (TypeError, ValueError):
+            payload = None
+            _log_outbound_response(response.status_code, payload, json_parsed=False)
+            raise ZavuError("Zavu returned an invalid message response.")
+        _log_outbound_response(response.status_code, payload, json_parsed=True)
         if response.status_code in {401, 403}:
             raise ZavuError("Zavu authentication failed. Check the local API key.")
         response.raise_for_status()
-        return response.json()
+        return payload
     except ZavuError:
         raise
     except requests.RequestException as exc:

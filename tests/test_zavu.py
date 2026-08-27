@@ -90,6 +90,28 @@ class ZavuIntegrationTests(unittest.TestCase):
         self.assertEqual(post.call_args.kwargs["json"], {"to": "+14155551234", "channel": "whatsapp", "messageType": "text", "text": "Hello Sheila"})
         self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer zv_test_key")
 
+    def test_outbound_whatsapp_logs_only_safe_response_diagnostics(self):
+        response = unittest.mock.Mock(status_code=202)
+        response.json.return_value = {
+            "message": {"id": "msg_private", "status": "queued"},
+            "requestId": "request_private",
+        }
+        response.raise_for_status.return_value = None
+        with patch.object(zavu.config, "ZAVU_API_KEY", "zv_test_key"), \
+             patch.object(zavu.requests, "post", return_value=response), \
+             patch("builtins.print") as log:
+            zavu.send_whatsapp_text("+14155551234", "private message text")
+        diagnostic = log.call_args.args[0]
+        self.assertEqual(
+            diagnostic,
+            "[zavu] Outbound response http_status=202; json_parsed=yes; "
+            "top_level_keys=message,requestId; Zavu accepted request=yes",
+        )
+        self.assertNotIn("msg_private", diagnostic)
+        self.assertNotIn("request_private", diagnostic)
+        self.assertNotIn("+14155551234", diagnostic)
+        self.assertNotIn("private message text", diagnostic)
+
     def test_extracts_only_whatsapp_text_inbound_messages(self):
         self.assertEqual(zavu.extract_inbound_text_event(_event("Good morning")), ("+14155551234", "Good morning"))
         non_text = _event()
