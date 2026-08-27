@@ -3,6 +3,7 @@ import hmac
 import http.client
 import json
 import os
+import sqlite3
 import threading
 import time
 import unittest
@@ -52,11 +53,23 @@ class ZavuIntegrationTests(unittest.TestCase):
     def test_run_server_binds_the_configured_port(self):
         server = unittest.mock.Mock()
         server.serve_forever.side_effect = RuntimeError("stop test server")
+        initialization_completed = False
+
+        def initialize_memory() -> None:
+            nonlocal initialization_completed
+            initialization_completed = True
+
+        def create_server(*args: object) -> unittest.mock.Mock:
+            self.assertTrue(initialization_completed)
+            return server
+
         with patch.object(zavu_webhook.zavu, "webhook_secret", return_value=SECRET), \
              patch.object(zavu_webhook.config, "get_zavu_webhook_port", return_value=3017), \
-             patch.object(zavu_webhook, "ThreadingHTTPServer", return_value=server) as http_server:
+             patch.object(zavu_webhook.memory, "init_db", side_effect=initialize_memory) as init_db, \
+             patch.object(zavu_webhook, "ThreadingHTTPServer", side_effect=create_server) as http_server:
             with self.assertRaisesRegex(RuntimeError, "stop test server"):
                 zavu_webhook.run_server()
+        init_db.assert_called_once_with()
         http_server.assert_called_once_with(("0.0.0.0", 3017), zavu_webhook.ZavuWebhookHandler)
 
     def test_missing_api_key_fails_without_leaking_a_value(self):
@@ -118,6 +131,18 @@ class ZavuIntegrationTests(unittest.TestCase):
         self.assertEqual(messages[1], "Background processing failed (RuntimeError); no message data logged")
         self.assertNotIn("+14155551234", messages[1])
         self.assertNotIn("whsec_secret", messages[1])
+
+    def test_sqlite_operational_error_identifies_memory_persistence_without_details(self):
+        sensitive_error = sqlite3.OperationalError("no such table: exchanges for +14155551234")
+        with patch.object(zavu_webhook, "process_zavu_event", side_effect=sensitive_error), \
+             patch.object(zavu_webhook, "_log") as log:
+            zavu_webhook._process_safely(_event())
+        self.assertEqual(
+            log.call_args_list[1].args[0],
+            "Background processing failed in SQLite memory persistence "
+            "(OperationalError); database initialization or writable persistent storage is required",
+        )
+        self.assertNotIn("+14155551234", log.call_args_list[1].args[0])
 
     def test_whatsapp_adapter_uses_the_same_shared_handler_as_terminal(self):
         self.assertIs(zavu_webhook.process_message, sheila_handler.process_message)

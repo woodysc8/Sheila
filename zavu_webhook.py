@@ -5,10 +5,12 @@ Run separately from the terminal client: ``python zavu_webhook.py``.
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import sqlite3
 import threading
 
 from integrations import zavu
 import config
+import memory
 from sheila_handler import process_message
 
 
@@ -98,6 +100,11 @@ def _process_safely(event: dict) -> None:
     try:
         _log("Background processing started")
         process_zavu_event(event)
+    except sqlite3.OperationalError:
+        _log(
+            "Background processing failed in SQLite memory persistence "
+            "(OperationalError); database initialization or writable persistent storage is required"
+        )
     except zavu.ZavuError as exc:
         _log(f"Background processing failed during Zavu delivery ({type(exc).__name__}); no message data logged")
     except Exception as exc:
@@ -107,6 +114,7 @@ def _process_safely(event: dict) -> None:
 def run_server(host: str = HOST, port: int | None = None) -> None:
     zavu.webhook_secret()  # Refuse to run an unauthenticated public endpoint.
     port = config.get_zavu_webhook_port() if port is None else port
+    memory.init_db()
     server = ThreadingHTTPServer((host, port), ZavuWebhookHandler)
     print(f"Sheila Zavu webhook listening on http://{host}:{port}{WEBHOOK_PATH}")
     server.serve_forever()
