@@ -93,7 +93,22 @@ class ZavuIntegrationTests(unittest.TestCase):
     def test_outbound_whatsapp_logs_only_safe_response_diagnostics(self):
         response = unittest.mock.Mock(status_code=202)
         response.json.return_value = {
-            "message": {"id": "msg_private", "status": "queued"},
+            "message": {
+                "id": "msg_private",
+                "providerMessageId": "provider_private",
+                "status": "queued",
+                "channel": "whatsapp",
+                "messageType": "text",
+                "to": "+14155551234",
+                "from": "+14155550000",
+                "text": "private message text",
+                "content": {"url": "https://private.example"},
+                "metadata": {"secret": "private metadata"},
+                "conversationId": "conversation_private",
+                "createdAt": "2026-09-01T00:00:00Z",
+                "errorCode": "private_error_code",
+                "errorMessage": "private error message",
+            },
             "requestId": "request_private",
         }
         response.raise_for_status.return_value = None
@@ -105,12 +120,24 @@ class ZavuIntegrationTests(unittest.TestCase):
         self.assertEqual(
             diagnostic,
             "[zavu] Outbound response http_status=202; json_parsed=yes; "
-            "top_level_keys=message,requestId; Zavu accepted request=yes",
+            "top_level_keys=message,requestId; message_is_object=yes; "
+            "message_keys=channel,content,conversationId,createdAt,errorCode,errorMessage,from,id,messageType,metadata,providerMessageId,status,text,to; "
+            "status=queued; channel=whatsapp; messageType=text; has_id=yes; "
+            "has_provider_message_id=yes; has_error_code=yes; has_error_message=yes; "
+            "Zavu accepted request=yes",
         )
         self.assertNotIn("msg_private", diagnostic)
+        self.assertNotIn("provider_private", diagnostic)
         self.assertNotIn("request_private", diagnostic)
         self.assertNotIn("+14155551234", diagnostic)
+        self.assertNotIn("+14155550000", diagnostic)
         self.assertNotIn("private message text", diagnostic)
+        self.assertNotIn("private.example", diagnostic)
+        self.assertNotIn("private metadata", diagnostic)
+        self.assertNotIn("conversation_private", diagnostic)
+        self.assertNotIn("2026-09-01T00:00:00Z", diagnostic)
+        self.assertNotIn("private_error_code", diagnostic)
+        self.assertNotIn("private error message", diagnostic)
 
     def test_extracts_only_whatsapp_text_inbound_messages(self):
         self.assertEqual(zavu.extract_inbound_text_event(_event("Good morning")), ("+14155551234", "Good morning"))

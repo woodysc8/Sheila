@@ -26,11 +26,23 @@ def _api_key() -> str:
 def _log_outbound_response(status_code: int, payload: object, json_parsed: bool) -> None:
     """Log only non-sensitive metadata about Zavu's outbound API response."""
     top_level_keys = sorted(payload) if isinstance(payload, dict) else []
+    message = payload.get("message") if isinstance(payload, dict) else None
+    message_is_object = isinstance(message, dict)
+    message_keys = sorted(message) if message_is_object else []
     accepted = 200 <= status_code < 300
     print(
         "[zavu] Outbound response "
         f"http_status={status_code}; json_parsed={'yes' if json_parsed else 'no'}; "
         f"top_level_keys={','.join(top_level_keys) or 'none'}; "
+        f"message_is_object={'yes' if message_is_object else 'no'}; "
+        f"message_keys={','.join(message_keys) or 'none'}; "
+        f"status={message.get('status') if message_is_object else 'none'}; "
+        f"channel={message.get('channel') if message_is_object else 'none'}; "
+        f"messageType={message.get('messageType') if message_is_object else 'none'}; "
+        f"has_id={'yes' if message_is_object and 'id' in message else 'no'}; "
+        f"has_provider_message_id={'yes' if message_is_object and 'providerMessageId' in message else 'no'}; "
+        f"has_error_code={'yes' if message_is_object and 'errorCode' in message else 'no'}; "
+        f"has_error_message={'yes' if message_is_object and 'errorMessage' in message else 'no'}; "
         f"Zavu accepted request={'yes' if accepted else 'no'}",
         flush=True,
     )
