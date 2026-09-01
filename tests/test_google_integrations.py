@@ -1,4 +1,6 @@
 import base64
+import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -12,8 +14,9 @@ from integrations.google_auth import GoogleAuthError, READ_ONLY_SCOPES, load_cre
 
 class GoogleAuthTests(unittest.TestCase):
     def test_missing_credential_file_fails_cleanly(self):
-        with self.assertRaises(GoogleAuthError):
-            load_credentials("does-not-exist.json")
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(GoogleAuthError):
+                load_credentials("does-not-exist.json")
 
     def test_config_uses_the_authorized_user_credential_file(self):
         self.assertTrue(config.GOOGLE_OAUTH_CREDENTIALS_FILE.endswith(".oauth2.sam@streetcredpr.com.json"))
@@ -22,23 +25,41 @@ class GoogleAuthTests(unittest.TestCase):
     def test_credential_file_loads(self, loader):
         credentials = MagicMock(valid=True)
         loader.return_value = credentials
-        with tempfile.NamedTemporaryFile() as credential_file:
-            self.assertIs(load_credentials(credential_file.name), credentials)
+        with patch.dict(os.environ, {}, clear=True):
+            with tempfile.NamedTemporaryFile() as credential_file:
+                self.assertIs(load_credentials(credential_file.name), credentials)
         loader.assert_called_once_with(credential_file.name, READ_ONLY_SCOPES)
+
+    @patch("google.oauth2.credentials.Credentials.from_authorized_user_info")
+    @patch("google.oauth2.credentials.Credentials.from_authorized_user_file")
+    def test_credential_json_environment_variable_loads(self, file_loader, info_loader):
+        credentials = MagicMock(valid=True)
+        info_loader.return_value = credentials
+        credential_info = {"token": "test-token", "refresh_token": "test-refresh-token"}
+        with patch.dict(
+            os.environ,
+            {"GOOGLE_OAUTH_CREDENTIALS_JSON": json.dumps(credential_info)},
+            clear=True,
+        ):
+            self.assertIs(load_credentials("does-not-exist.json"), credentials)
+        info_loader.assert_called_once_with(credential_info, READ_ONLY_SCOPES)
+        file_loader.assert_not_called()
 
     @patch("google.oauth2.credentials.Credentials.from_authorized_user_file", side_effect=ValueError("bad json"))
     def test_invalid_credentials_fail_cleanly(self, _loader):
-        with tempfile.NamedTemporaryFile() as credential_file:
-            with self.assertRaises(GoogleAuthError):
-                load_credentials(credential_file.name)
+        with patch.dict(os.environ, {}, clear=True):
+            with tempfile.NamedTemporaryFile() as credential_file:
+                with self.assertRaises(GoogleAuthError):
+                    load_credentials(credential_file.name)
 
     @patch("google.auth.transport.requests.Request")
     @patch("google.oauth2.credentials.Credentials.from_authorized_user_file")
     def test_expired_credentials_refresh_in_memory(self, loader, request):
         credentials = MagicMock(valid=False, expired=True, refresh_token="refresh-token")
         loader.return_value = credentials
-        with tempfile.NamedTemporaryFile() as credential_file:
-            self.assertIs(load_credentials(credential_file.name), credentials)
+        with patch.dict(os.environ, {}, clear=True):
+            with tempfile.NamedTemporaryFile() as credential_file:
+                self.assertIs(load_credentials(credential_file.name), credentials)
         credentials.refresh.assert_called_once()
 
 

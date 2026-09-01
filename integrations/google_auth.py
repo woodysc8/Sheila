@@ -1,5 +1,7 @@
 """Shared, read-only authorized-user Google API authentication."""
 
+import json
+import os
 from pathlib import Path
 
 import config
@@ -21,11 +23,17 @@ def load_credentials(credentials_file: str | None = None):
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
 
-    path = Path(credentials_file or config.GOOGLE_OAUTH_CREDENTIALS_FILE)
-    if not path.is_file():
-        raise GoogleAuthError(f"Google credentials file is missing: {path}")
     try:
-        credentials = Credentials.from_authorized_user_file(str(path), READ_ONLY_SCOPES)
+        credentials_json = os.environ.get("GOOGLE_OAUTH_CREDENTIALS_JSON")
+        if credentials_json:
+            credentials = Credentials.from_authorized_user_info(
+                json.loads(credentials_json), READ_ONLY_SCOPES
+            )
+        else:
+            path = Path(credentials_file or config.GOOGLE_OAUTH_CREDENTIALS_FILE)
+            if not path.is_file():
+                raise GoogleAuthError(f"Google credentials file is missing: {path}")
+            credentials = Credentials.from_authorized_user_file(str(path), READ_ONLY_SCOPES)
         if not credentials.valid:
             if credentials.expired and credentials.refresh_token:
                 credentials.refresh(Request())
