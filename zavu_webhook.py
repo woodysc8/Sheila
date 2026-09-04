@@ -33,15 +33,15 @@ def process_zavu_event(event: dict) -> None:
         _log("Event did not pass the inbound WhatsApp text extraction check")
         return
 
-    channel, sender, text = inbound
-    _log("Event passed the inbound WhatsApp text extraction check")
+    channel, sender, text, sender_id = inbound
+    _log("Event passed the inbound text extraction check")
 
     _log("Sheila process_message started")
     response = process_message(text)
     _log("Sheila process_message completed successfully")
 
     _log("Zavu outbound send started")
-    zavu.send_text(sender, channel, response)
+    zavu.send_text(sender, channel, response, sender_id)
     _log("Zavu outbound send completed successfully")
 
 

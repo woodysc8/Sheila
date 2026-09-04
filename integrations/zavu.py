@@ -1,4 +1,4 @@
-"""Small, isolated client for Zavu's WhatsApp messaging and webhook security."""
+"""Small, isolated client for Zavu messaging and webhook security."""
 
 import hashlib
 import hmac
@@ -23,7 +23,7 @@ def _api_key() -> str:
     return config.ZAVU_API_KEY
 
 
-def _log_outbound_response(status_code: int, payload: object, json_parsed: bool) -> None:
+def _log_outbound_response(status_code: int, payload: object, json_parsed: bool, channel: str) -> None:
     """Log only non-sensitive metadata about Zavu's outbound API response."""
     top_level_keys = sorted(payload) if isinstance(payload, dict) else []
     message = payload.get("message") if isinstance(payload, dict) else None
@@ -33,6 +33,7 @@ def _log_outbound_response(status_code: int, payload: object, json_parsed: bool)
     print(
         "[zavu] Outbound response "
         f"http_status={status_code}; json_parsed={'yes' if json_parsed else 'no'}; "
+        f"channel={channel}; "
         f"top_level_keys={','.join(top_level_keys) or 'none'}; "
         f"message_is_object={'yes' if message_is_object else 'no'}; "
         f"message_keys={','.join(message_keys) or 'none'}; "
@@ -48,24 +49,32 @@ def _log_outbound_response(status_code: int, payload: object, json_parsed: bool)
     )
 
 
-def send_text(recipient: str, channel: str, text: str) -> dict:
+def send_text(recipient: str, channel: str, text: str, sender_id: str | None = None) -> dict:
     """Queue one text response through Zavu's documented API."""
     if not recipient or not text.strip():
         raise ZavuError("Zavu recipient and message text are required.")
+    if channel == "telegram" and not sender_id:
+        raise ZavuError("Zavu Telegram sender ID is required.")
+    headers = {"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"}
+    payload = {"to": recipient, "text": text, "channel": channel} if channel == "telegram" else {
+        "to": recipient, "channel": channel, "messageType": "text", "text": text,
+    }
+    if channel == "telegram":
+        headers["Zavu-Sender"] = sender_id
     try:
         response = requests.post(
             ZAVU_MESSAGES_URL,
-            headers={"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"},
-            json={"to": recipient, "channel": channel, "messageType": "text", "text": text},
+            headers=headers,
+            json=payload,
             timeout=20,
         )
         try:
             payload = response.json()
         except (TypeError, ValueError):
             payload = None
-            _log_outbound_response(response.status_code, payload, json_parsed=False)
+            _log_outbound_response(response.status_code, payload, json_parsed=False, channel=channel)
             raise ZavuError("Zavu returned an invalid message response.")
-        _log_outbound_response(response.status_code, payload, json_parsed=True)
+        _log_outbound_response(response.status_code, payload, json_parsed=True, channel=channel)
         if response.status_code in {401, 403}:
             raise ZavuError("Zavu authentication failed. Check the local API key.")
         response.raise_for_status()
@@ -73,7 +82,7 @@ def send_text(recipient: str, channel: str, text: str) -> dict:
     except ZavuError:
         raise
     except requests.RequestException as exc:
-        raise ZavuError("Zavu WhatsApp delivery is unavailable right now.") from exc
+        raise ZavuError("Zavu message delivery is unavailable right now.") from exc
     except (TypeError, ValueError) as exc:
         raise ZavuError("Zavu returned an invalid message response.") from exc
 
@@ -108,12 +117,15 @@ def webhook_secret() -> str:
     return config.ZAVU_WEBHOOK_SECRET
 
 
-def extract_inbound_text_event(event: dict) -> tuple[str, str, str] | None:
-    """Return the channel, opaque sender identifier, and text for text events."""
+def extract_inbound_text_event(event: dict) -> tuple[str, str, str, str | None] | None:
+    """Return the channel, recipient, text, and top-level sender ID for text events."""
     data = event.get("data") if event.get("type") == "message.inbound" else None
+    sender_id = event.get("senderId")
     if not isinstance(data, dict) or data.get("channel") not in {"whatsapp", "telegram"} or data.get("messageType") != "text":
         return None
     sender, text = data.get("from"), data.get("text")
+    if data.get("channel") == "telegram" and (not isinstance(sender_id, str) or not sender_id):
+        return None
     if not isinstance(sender, str) or not isinstance(text, str) or not sender or not text.strip():
         return None
-    return data["channel"], sender, text.strip()
+    return data["channel"], sender, text.strip(), sender_id
