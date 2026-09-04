@@ -30,10 +30,18 @@ def _log_outbound_response(status_code: int, payload: object, json_parsed: bool,
     message_is_object = isinstance(message, dict)
     message_keys = sorted(message) if message_is_object else []
     accepted = 200 <= status_code < 300
+    error_fields = ""
+    if isinstance(payload, dict) and not accepted:
+        error_fields = (
+            f"error_code={payload.get('code')}; "
+            f"error_message={payload.get('message')}; "
+            f"error_details={payload.get('details')}; "
+        )
     print(
         "[zavu] Outbound response "
         f"http_status={status_code}; json_parsed={'yes' if json_parsed else 'no'}; "
         f"channel={channel}; "
+        f"{error_fields}"
         f"top_level_keys={','.join(top_level_keys) or 'none'}; "
         f"message_is_object={'yes' if message_is_object else 'no'}; "
         f"message_keys={','.join(message_keys) or 'none'}; "
