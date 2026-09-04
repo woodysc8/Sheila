@@ -41,7 +41,7 @@ def process_zavu_event(event: dict) -> None:
     _log("Sheila process_message completed successfully")
 
     _log("Zavu outbound send started")
-    zavu.send_whatsapp_text(sender, response, channel)
+    zavu.send_text(sender, channel, response)
     _log("Zavu outbound send completed successfully")
 
 

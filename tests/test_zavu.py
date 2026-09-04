@@ -75,7 +75,7 @@ class ZavuIntegrationTests(unittest.TestCase):
     def test_missing_api_key_fails_without_leaking_a_value(self):
         with patch.object(zavu.config, "ZAVU_API_KEY", ""):
             with self.assertRaisesRegex(zavu.ZavuError, "Zavu is not configured") as raised:
-                zavu.send_whatsapp_text("+14155551234", "hello")
+                zavu.send_text("+14155551234", "whatsapp", "hello")
         self.assertNotIn("Bearer", str(raised.exception))
 
     def test_outbound_whatsapp_uses_documented_request_format(self):
@@ -84,7 +84,7 @@ class ZavuIntegrationTests(unittest.TestCase):
         response.raise_for_status.return_value = None
         with patch.object(zavu.config, "ZAVU_API_KEY", "zv_test_key"), \
              patch.object(zavu.requests, "post", return_value=response) as post:
-            result = zavu.send_whatsapp_text("+14155551234", "Hello Sheila", "whatsapp")
+            result = zavu.send_text("+14155551234", "whatsapp", "Hello Sheila")
         self.assertEqual(result["message"]["status"], "queued")
         self.assertEqual(post.call_args.args[0], zavu.ZAVU_MESSAGES_URL)
         self.assertEqual(post.call_args.kwargs["json"], {"to": "+14155551234", "channel": "whatsapp", "messageType": "text", "text": "Hello Sheila"})
@@ -115,7 +115,7 @@ class ZavuIntegrationTests(unittest.TestCase):
         with patch.object(zavu.config, "ZAVU_API_KEY", "zv_test_key"), \
              patch.object(zavu.requests, "post", return_value=response), \
              patch("builtins.print") as log:
-            zavu.send_whatsapp_text("+14155551234", "private message text", "whatsapp")
+            zavu.send_text("+14155551234", "whatsapp", "private message text")
         diagnostic = log.call_args.args[0]
         self.assertEqual(
             diagnostic,
@@ -154,7 +154,7 @@ class ZavuIntegrationTests(unittest.TestCase):
         response.raise_for_status.return_value = None
         with patch.object(zavu.config, "ZAVU_API_KEY", "zv_test_key"), \
              patch.object(zavu.requests, "post", return_value=response) as post:
-            zavu.send_whatsapp_text("telegram_user_1", "Hello Sheila", "telegram")
+            zavu.send_text("telegram_user_1", "telegram", "Hello Sheila")
         self.assertEqual(post.call_args.kwargs["json"]["channel"], "telegram")
 
     def test_signature_verification_accepts_valid_and_rejects_tampered_body(self):
@@ -166,11 +166,11 @@ class ZavuIntegrationTests(unittest.TestCase):
 
     def test_inbound_message_uses_existing_sheila_handler_then_zavu(self):
         with patch.object(zavu_webhook, "process_message", return_value="[ASANA RESULTS]\nTask A") as process, \
-             patch.object(zavu_webhook.zavu, "send_whatsapp_text") as send, \
+             patch.object(zavu_webhook.zavu, "send_text") as send, \
              patch.object(zavu_webhook, "_log") as log:
             zavu_webhook.process_zavu_event(_event())
         process.assert_called_once_with("What is due today in Asana?")
-        send.assert_called_once_with("+14155551234", "[ASANA RESULTS]\nTask A", "whatsapp")
+        send.assert_called_once_with("+14155551234", "whatsapp", "[ASANA RESULTS]\nTask A")
         self.assertEqual(
             [call.args[0] for call in log.call_args_list],
             [
@@ -186,9 +186,9 @@ class ZavuIntegrationTests(unittest.TestCase):
         event = _event("Good morning")
         event["data"].update({"channel": "telegram", "from": "telegram_user_1"})
         with patch.object(zavu_webhook, "process_message", return_value="Hello"), \
-             patch.object(zavu_webhook.zavu, "send_whatsapp_text") as send:
+             patch.object(zavu_webhook.zavu, "send_text") as send:
             zavu_webhook.process_zavu_event(event)
-        send.assert_called_once_with("telegram_user_1", "Hello", "telegram")
+        send.assert_called_once_with("telegram_user_1", "telegram", "Hello")
 
     def test_background_processing_failure_log_is_redacted(self):
         sensitive_error = RuntimeError("message content +14155551234 whsec_secret")

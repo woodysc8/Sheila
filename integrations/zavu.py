@@ -48,7 +48,7 @@ def _log_outbound_response(status_code: int, payload: object, json_parsed: bool)
     )
 
 
-def send_whatsapp_text(recipient: str, text: str, channel: str = "whatsapp") -> dict:
+def send_text(recipient: str, channel: str, text: str) -> dict:
     """Queue one text response through Zavu's documented API."""
     if not recipient or not text.strip():
         raise ZavuError("Zavu recipient and message text are required.")
