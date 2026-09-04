@@ -1,4 +1,4 @@
-"""Local, signature-verified Zavu webhook server for Sheila's WhatsApp interface.
+"""Local, signature-verified Zavu webhook server for Sheila's messaging interface.
 
 Run separately from the terminal client: ``python zavu_webhook.py``.
 """
@@ -27,13 +27,13 @@ def _log(message: str) -> None:
 
 
 def process_zavu_event(event: dict) -> None:
-    """Send only verified inbound WhatsApp text through Sheila's existing handler."""
+    """Send only verified inbound WhatsApp or Telegram text through Sheila's existing handler."""
     inbound = zavu.extract_inbound_text_event(event)
     if not inbound:
         _log("Event did not pass the inbound WhatsApp text extraction check")
         return
 
-    sender, text = inbound
+    channel, sender, text = inbound
     _log("Event passed the inbound WhatsApp text extraction check")
 
     _log("Sheila process_message started")
@@ -41,7 +41,7 @@ def process_zavu_event(event: dict) -> None:
     _log("Sheila process_message completed successfully")
 
     _log("Zavu outbound send started")
-    zavu.send_whatsapp_text(sender, response)
+    zavu.send_whatsapp_text(sender, response, channel)
     _log("Zavu outbound send completed successfully")
 
 

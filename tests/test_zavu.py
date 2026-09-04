@@ -84,7 +84,7 @@ class ZavuIntegrationTests(unittest.TestCase):
         response.raise_for_status.return_value = None
         with patch.object(zavu.config, "ZAVU_API_KEY", "zv_test_key"), \
              patch.object(zavu.requests, "post", return_value=response) as post:
-            result = zavu.send_whatsapp_text("+14155551234", "Hello Sheila")
+            result = zavu.send_whatsapp_text("+14155551234", "Hello Sheila", "whatsapp")
         self.assertEqual(result["message"]["status"], "queued")
         self.assertEqual(post.call_args.args[0], zavu.ZAVU_MESSAGES_URL)
         self.assertEqual(post.call_args.kwargs["json"], {"to": "+14155551234", "channel": "whatsapp", "messageType": "text", "text": "Hello Sheila"})
@@ -115,7 +115,7 @@ class ZavuIntegrationTests(unittest.TestCase):
         with patch.object(zavu.config, "ZAVU_API_KEY", "zv_test_key"), \
              patch.object(zavu.requests, "post", return_value=response), \
              patch("builtins.print") as log:
-            zavu.send_whatsapp_text("+14155551234", "private message text")
+            zavu.send_whatsapp_text("+14155551234", "private message text", "whatsapp")
         diagnostic = log.call_args.args[0]
         self.assertEqual(
             diagnostic,
@@ -139,11 +139,23 @@ class ZavuIntegrationTests(unittest.TestCase):
         self.assertNotIn("private_error_code", diagnostic)
         self.assertNotIn("private error message", diagnostic)
 
-    def test_extracts_only_whatsapp_text_inbound_messages(self):
-        self.assertEqual(zavu.extract_inbound_text_event(_event("Good morning")), ("+14155551234", "Good morning"))
+    def test_extracts_only_supported_text_inbound_messages(self):
+        self.assertEqual(zavu.extract_inbound_text_event(_event("Good morning")), ("whatsapp", "+14155551234", "Good morning"))
         non_text = _event()
         non_text["data"]["messageType"] = "image"
         self.assertIsNone(zavu.extract_inbound_text_event(non_text))
+
+    def test_extracts_telegram_text_and_sends_on_telegram(self):
+        event = _event("Good morning")
+        event["data"].update({"channel": "telegram", "from": "telegram_user_1"})
+        self.assertEqual(zavu.extract_inbound_text_event(event), ("telegram", "telegram_user_1", "Good morning"))
+        response = unittest.mock.Mock(status_code=202)
+        response.json.return_value = {"message": {"id": "msg_telegram", "status": "queued"}}
+        response.raise_for_status.return_value = None
+        with patch.object(zavu.config, "ZAVU_API_KEY", "zv_test_key"), \
+             patch.object(zavu.requests, "post", return_value=response) as post:
+            zavu.send_whatsapp_text("telegram_user_1", "Hello Sheila", "telegram")
+        self.assertEqual(post.call_args.kwargs["json"]["channel"], "telegram")
 
     def test_signature_verification_accepts_valid_and_rejects_tampered_body(self):
         body = json.dumps(_event(), separators=(",", ":")).encode()
@@ -158,7 +170,7 @@ class ZavuIntegrationTests(unittest.TestCase):
              patch.object(zavu_webhook, "_log") as log:
             zavu_webhook.process_zavu_event(_event())
         process.assert_called_once_with("What is due today in Asana?")
-        send.assert_called_once_with("+14155551234", "[ASANA RESULTS]\nTask A")
+        send.assert_called_once_with("+14155551234", "[ASANA RESULTS]\nTask A", "whatsapp")
         self.assertEqual(
             [call.args[0] for call in log.call_args_list],
             [
@@ -169,6 +181,14 @@ class ZavuIntegrationTests(unittest.TestCase):
                 "Zavu outbound send completed successfully",
             ],
         )
+
+    def test_telegram_inbound_message_uses_telegram_outbound_channel(self):
+        event = _event("Good morning")
+        event["data"].update({"channel": "telegram", "from": "telegram_user_1"})
+        with patch.object(zavu_webhook, "process_message", return_value="Hello"), \
+             patch.object(zavu_webhook.zavu, "send_whatsapp_text") as send:
+            zavu_webhook.process_zavu_event(event)
+        send.assert_called_once_with("telegram_user_1", "Hello", "telegram")
 
     def test_background_processing_failure_log_is_redacted(self):
         sensitive_error = RuntimeError("message content +14155551234 whsec_secret")
