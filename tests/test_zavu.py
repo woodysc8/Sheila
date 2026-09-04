@@ -146,17 +146,25 @@ class ZavuIntegrationTests(unittest.TestCase):
         self.assertIsNone(zavu.extract_inbound_text_event(non_text))
 
     def test_extracts_telegram_text_and_sends_on_telegram(self):
-        event = _event("Good morning")
-        event["data"].update({"channel": "telegram", "from": "telegram_user_1"})
-        self.assertEqual(zavu.extract_inbound_text_event(event), ("telegram", "telegram_user_1", "Good morning", "sender_test"))
+        event = {
+            "type": "message.inbound",
+            "senderId": "telegram_sender_test",
+            "data": {
+                "from": "123456789",
+                "channel": "telegram",
+                "messageType": "text",
+                "text": "the message",
+            },
+        }
+        self.assertEqual(zavu.extract_inbound_text_event(event), ("telegram", "123456789", "the message", "telegram_sender_test"))
         response = unittest.mock.Mock(status_code=202)
         response.json.return_value = {"message": {"id": "msg_telegram", "status": "queued"}}
         response.raise_for_status.return_value = None
         with patch.object(zavu.config, "ZAVU_API_KEY", "zv_test_key"), \
              patch.object(zavu.requests, "post", return_value=response) as post:
-            zavu.send_text("telegram_user_1", "telegram", "Hello Sheila", "sender_test")
-        self.assertEqual(post.call_args.kwargs["json"], {"to": "telegram_user_1", "text": "Hello Sheila", "channel": "telegram"})
-        self.assertEqual(post.call_args.kwargs["headers"]["Zavu-Sender"], "sender_test")
+            zavu.send_text("123456789", "telegram", "Hello Sheila", "telegram_sender_test")
+        self.assertEqual(post.call_args.kwargs["json"], {"to": "123456789", "text": "Hello Sheila", "channel": "telegram"})
+        self.assertEqual(post.call_args.kwargs["headers"]["Zavu-Sender"], "telegram_sender_test")
 
     def test_signature_verification_accepts_valid_and_rejects_tampered_body(self):
         body = json.dumps(_event(), separators=(",", ":")).encode()
@@ -179,6 +187,7 @@ class ZavuIntegrationTests(unittest.TestCase):
                 "Sheila process_message started",
                 "Sheila process_message completed successfully",
                 "Zavu outbound send started",
+                "Inbound sender diagnostic channel=whatsapp; sender_type=str; sender_repr='+14155551234'; sender_id_type=str; sender_is_digits=False",
                 "Zavu outbound send completed successfully",
             ],
         )

@@ -41,6 +41,11 @@ def process_zavu_event(event: dict) -> None:
     _log("Sheila process_message completed successfully")
 
     _log("Zavu outbound send started")
+    _log(
+        f"Inbound sender diagnostic channel={channel}; sender_type={type(sender).__name__}; "
+        f"sender_repr={sender!r}; sender_id_type={type(sender_id).__name__}; "
+        f"sender_is_digits={sender.isdigit()}"
+    )
     zavu.send_text(sender, channel, response, sender_id)
     _log("Zavu outbound send completed successfully")
 
