@@ -136,4 +136,6 @@ def extract_inbound_text_event(event: dict) -> tuple[str, str, str, str | None] 
         return None
     if not isinstance(sender, str) or not isinstance(text, str) or not sender or not text.strip():
         return None
+    if data["channel"] == "telegram":
+        sender = sender.removeprefix("telegram:")
     return data["channel"], sender, text.strip(), sender_id

@@ -150,7 +150,7 @@ class ZavuIntegrationTests(unittest.TestCase):
             "type": "message.inbound",
             "senderId": "telegram_sender_test",
             "data": {
-                "from": "123456789",
+                "from": "telegram:123456789",
                 "channel": "telegram",
                 "messageType": "text",
                 "text": "the message",
@@ -194,11 +194,11 @@ class ZavuIntegrationTests(unittest.TestCase):
 
     def test_telegram_inbound_message_uses_telegram_outbound_channel(self):
         event = _event("Good morning")
-        event["data"].update({"channel": "telegram", "from": "telegram_user_1"})
+        event["data"].update({"channel": "telegram", "from": "telegram:123456789"})
         with patch.object(zavu_webhook, "process_message", return_value="Hello"), \
              patch.object(zavu_webhook.zavu, "send_text") as send:
             zavu_webhook.process_zavu_event(event)
-        send.assert_called_once_with("telegram_user_1", "telegram", "Hello", "sender_test")
+        send.assert_called_once_with("123456789", "telegram", "Hello", "sender_test")
 
     def test_background_processing_failure_log_is_redacted(self):
         sensitive_error = RuntimeError("message content +14155551234 whsec_secret")
