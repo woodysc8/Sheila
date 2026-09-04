@@ -5,6 +5,43 @@ import brain
 
 
 class BrainOpenAITests(unittest.TestCase):
+    def test_memory_context_includes_structured_and_document_knowledge(self):
+        facade = brain.Brain()
+        with patch.object(brain.memory, "get_context", return_value="Recent conversation"), \
+             patch.object(brain.memory, "get_structured_context", return_value="- [preference] Boston"), \
+             patch.object(brain.knowledge, "search_documents", return_value="[from User Background]: College of the Holy Cross, Worcester, MA May 2026") as search:
+            context = facade.get_memory_context("What college did I attend?")
+
+        self.assertIn("[STRUCTURED MEMORY]", context)
+        self.assertIn("Boston", context)
+        self.assertIn("[DOCUMENT KNOWLEDGE]", context)
+        self.assertIn("User Background", context)
+        self.assertIn("College of the Holy Cross", context)
+        search.assert_called_once_with("What college did I attend?", top_k=4)
+
+    def test_document_retrieval_failure_keeps_memory_context(self):
+        facade = brain.Brain()
+        with patch.object(brain.memory, "get_context", return_value="Recent conversation"), \
+             patch.object(brain.memory, "get_structured_context", return_value="Structured fact"), \
+             patch.object(brain.knowledge, "search_documents", side_effect=RuntimeError("embedding unavailable")):
+            context = facade.get_memory_context("What college did I attend?")
+
+        self.assertIn("Recent conversation", context)
+        self.assertIn("Structured fact", context)
+        self.assertNotIn("[DOCUMENT KNOWLEDGE]", context)
+
+    def test_empty_document_retrieval_keeps_memory_context(self):
+        facade = brain.Brain()
+        with patch.object(brain.memory, "get_context", return_value="Recent conversation"), \
+             patch.object(brain.memory, "get_structured_context", return_value="Structured fact"), \
+             patch.object(brain.knowledge, "search_documents", return_value="") as search:
+            context = facade.get_memory_context("What college did I attend?")
+
+        self.assertIn("Recent conversation", context)
+        self.assertIn("Structured fact", context)
+        self.assertNotIn("[DOCUMENT KNOWLEDGE]", context)
+        search.assert_called_once_with("What college did I attend?", top_k=4)
+
     def test_brain_facade_delegates_to_memory_and_knowledge_backends(self):
         facade = brain.Brain()
         memory_item = {"id": 1, "content": "A fact"}
@@ -33,6 +70,8 @@ class BrainOpenAITests(unittest.TestCase):
         response.json.return_value = {"output_text": "Your calendar is clear."}
         with patch.object(brain.config, "OPENAI_API_KEY", "test-key"), \
              patch.object(brain.memory, "get_context", return_value="Memory"), \
+               patch.object(brain.memory, "get_structured_context", return_value="Structured memory"), \
+               patch.object(brain.knowledge, "search_documents", return_value=""), \
              patch.object(brain.memory, "get_pending_notifications", return_value=[]), \
              patch("brain.requests.post", return_value=response) as post:
             reply = brain.think("What is on my calendar?", context="Calendar results: none")
@@ -56,6 +95,8 @@ class BrainOpenAITests(unittest.TestCase):
     def test_openai_failure_has_no_other_provider_fallback(self):
         with patch.object(brain.config, "OPENAI_API_KEY", "test-key"), \
              patch.object(brain.memory, "get_context", return_value="Memory"), \
+               patch.object(brain.memory, "get_structured_context", return_value="Structured memory"), \
+               patch.object(brain.knowledge, "search_documents", return_value=""), \
              patch.object(brain.memory, "get_pending_notifications", return_value=[]), \
              patch("brain.requests.post", side_effect=brain.requests.RequestException("down")):
             reply = brain.think("hello")

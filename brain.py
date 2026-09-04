@@ -40,7 +40,21 @@ class Brain:
         return knowledge.ingest_document(doc_id, text, source_name)
 
     def get_memory_context(self, query: str = "") -> str:
-        return f"{memory.get_context(current_query=query)}\n\n{memory.get_structured_context(query=query)}"
+        context = [
+            "[CONVERSATIONAL MEMORY]",
+            memory.get_context(current_query=query),
+            "",
+            "[STRUCTURED MEMORY]",
+            memory.get_structured_context(query=query),
+        ]
+        try:
+            document_context = self.search_documents(query, top_k=4) if query.strip() else ""
+        except Exception as exc:
+            print(f"[brain] Document retrieval failed: {exc}")
+            document_context = ""
+        if document_context:
+            context.extend(["", "[DOCUMENT KNOWLEDGE]", document_context])
+        return "\n".join(context)
 
 
 brain = Brain()
@@ -119,6 +133,7 @@ def think(user_text: str, context: str = "") -> str:
 - For calendar-only questions, [CALENDAR RESULTS] is authoritative for its stated range: describe only its events, preserve their exact dates/times, and do not present Gmail, Drive, memory, or general knowledge as calendar events.
 - Never use old memory as a substitute for current API results. Clearly distinguish an unavailable integration from a successful zero-result query.
 - A Drive document mention or folder association does not prove a company is a client, account, or customer. State that evidence is insufficient unless the retrieved Drive text explicitly identifies that relationship.
+- Treat [DOCUMENT KNOWLEDGE] as retrieved evidence and preserve its visible source labels. An unrelated fact in one source does not establish a different fact: working remotely from Maryland does not establish attending the University of Maryland. An explicit document statement that Sam attended a named college is evidence for that college.
 - Do not describe old Gmail results as current or recent. Preserve retrieved dates exactly when available.
 - If evidence is insufficient, say so plainly. Do not infer missing relationships, dates, or events.
 
