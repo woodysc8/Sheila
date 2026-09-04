@@ -1,4 +1,6 @@
 import unittest
+import os
+import tempfile
 from unittest.mock import patch
 
 import main
@@ -6,6 +8,31 @@ import sheila_handler
 
 
 class TextMainTests(unittest.TestCase):
+    def test_explicit_memory_is_persisted_without_persisting ordinary_greeting(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(sheila_handler.memory.config, "DB_PATH", os.path.join(temp_dir, "memory.db")), \
+             patch.object(sheila_handler, "handle_request", return_value={"response": "Noted."}), \
+             patch.object(sheila_handler.memory, "log_exchange"):
+            main.process_message("I prefer aisle seats.")
+            main.process_message("hello")
+
+            memories = sheila_handler.memory.recall("What kind of airplane seat does Sam prefer?")
+
+        self.assertEqual(len(memories), 1)
+        self.assertEqual(memories[0]["content"], "I prefer aisle seats.")
+
+    def test_forget_that_removes_latest_durable_memory(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(sheila_handler.memory.config, "DB_PATH", os.path.join(temp_dir, "memory.db")), \
+             patch.object(sheila_handler, "handle_request", return_value={"response": "Done."}), \
+             patch.object(sheila_handler.memory, "log_exchange"):
+            main.process_message("Remember that my sister's name is Sarah.")
+            self.assertTrue(sheila_handler.memory.recall("What is my sister's name?"))
+            main.process_message("Forget that.")
+
+            memories = sheila_handler.memory.recall("What is my sister's name?")
+
+        self.assertEqual(memories, [])
     def test_process_message_uses_workflow_and_logs_exchange(self):
         with patch.object(sheila_handler, "handle_request", return_value={"response": "Hello."}) as workflow, \
              patch.object(sheila_handler.memory, "log_exchange") as log_exchange:

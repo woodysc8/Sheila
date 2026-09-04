@@ -68,18 +68,53 @@ def _memory_row(row):
     return item
 
 
+def _query_category(query: str) -> str | None:
+    lowered = query.lower()
+    if any(term in lowered for term in (" live ", " lives ", " reside ", " resides ")):
+        return "personal"
+    if any(term in lowered for term in (" work ", " job ", " employed ", " team ")):
+        return "work"
+    if any(term in lowered for term in (" prefer ", " preference ", " hate ", " like ", " dislike ")):
+        return "preference"
+    if any(term in lowered for term in (" sister ", " brother ", " friend ", " partner ", " wife ", " husband ")):
+        return "relationship"
+    if any(term in lowered for term in (" trip ", " travel ", " retreat ", " going ")):
+        return "travel"
+    return None
+
+
 def remember(category: str, content: str, source: str, source_id: str = None,
              importance: int = 0, metadata: dict = None) -> dict:
     """Persist one structured fact while keeping conversation exchanges separate."""
     init_db()
     now = datetime.now().isoformat()
+    metadata = metadata or {}
     conn = _connect()
+    memory_key = metadata.get("memory_key")
+    if memory_key:
+        rows = conn.execute("SELECT * FROM structured_memories ORDER BY updated_at DESC").fetchall()
+        for existing in rows:
+            existing_metadata = json.loads(existing["metadata"] or "{}")
+            if existing_metadata.get("memory_key") != memory_key:
+                continue
+            conn.execute(
+                """UPDATE structured_memories
+                   SET category = ?, content = ?, source = ?, source_id = ?,
+                       importance = ?, updated_at = ?, metadata = ?
+                   WHERE id = ?""",
+                (category, content, source, source_id, int(importance), now,
+                 json.dumps(metadata), existing["id"]),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM structured_memories WHERE id = ?", (existing["id"],)).fetchone()
+            conn.close()
+            return _memory_row(row)
     cursor = conn.execute(
         """INSERT INTO structured_memories
            (category, content, source, source_id, importance, created_at, updated_at, metadata)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (category, content, source, source_id, int(importance), now, now,
-         json.dumps(metadata or {})),
+         json.dumps(metadata)),
     )
     conn.commit()
     row = conn.execute("SELECT * FROM structured_memories WHERE id = ?", (cursor.lastrowid,)).fetchone()
@@ -92,6 +127,7 @@ def recall(query: str = "", category: str = None, limit: int = 10) -> list[dict]
     init_db()
     conn = _connect()
     clauses, params = [], []
+    category = category or _query_category(f" {query.lower()} ")
     if category:
         clauses.append("category = ?")
         params.append(category)
@@ -138,6 +174,28 @@ def forget(memory_id: int) -> bool:
     init_db()
     conn = _connect()
     cursor = conn.execute("DELETE FROM structured_memories WHERE id = ?", (memory_id,))
+    conn.commit()
+    conn.close()
+    return cursor.rowcount > 0
+
+
+def forget_latest_structured(source: str = None) -> bool:
+    """Remove the most recently updated durable memory, optionally by source."""
+    init_db()
+    conn = _connect()
+    if source:
+        row = conn.execute(
+            "SELECT id FROM structured_memories WHERE source = ? ORDER BY updated_at DESC LIMIT 1",
+            (source,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT id FROM structured_memories ORDER BY updated_at DESC LIMIT 1"
+        ).fetchone()
+    if row is None:
+        conn.close()
+        return False
+    cursor = conn.execute("DELETE FROM structured_memories WHERE id = ?", (row["id"],))
     conn.commit()
     conn.close()
     return cursor.rowcount > 0

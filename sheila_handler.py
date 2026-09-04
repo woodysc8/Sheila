@@ -13,7 +13,8 @@ from agents.router import route_request
 from agents.workflow import handle_request
 
 REMEMBER_PHRASES = ["remember this", "remember that", "note that down", "don't forget this"]
-FORGET_PHRASES = ["forget that", "forget this", "delete that", "never mind that"]
+FORGET_PHRASES = ["forget that", "forget this", "don't remember this", "do not remember this", "delete that", "never mind that"]
+EXPLICIT_MEMORY_PREFIXES = ["remember that", "remember this", "keep in mind that", "keep in mind", "note that down"]
 CATCHUP_PHRASES = ["catch me up", "fill me in", "what did i miss", "what happened while"]
 MEETING_START_PHRASES = ["i'm in a meeting", "im in a meeting", "going into a meeting", "start meeting mode"]
 MEETING_END_PHRASES = ["meeting's over", "meeting is over", "i'm out of my meeting", "end meeting mode"]
@@ -52,10 +53,69 @@ def _handle_email_query() -> str:
     return f"The latest email activity was: {lines[0]}" if len(lines) == 1 else "Recent email activity includes: " + "; ".join(lines)
 
 
+def _memory_key(content: str) -> str | None:
+    lowered = content.lower()
+    if any(term in lowered for term in (" live ", " lives ", " reside ", " resides ")):
+        return "residence"
+    if any(term in lowered for term in (" prefer ", " hates ", " hate ", " don't like ", " do not like ")):
+        return "preference"
+    if any(term in lowered for term in (" work ", " works ", " job ", " employed ")):
+        return "work"
+    relationship = re.search(r"\bmy\s+(sister|brother|friend|mother|father|partner|wife|husband)\b", lowered)
+    if relationship:
+        return f"relationship:{relationship.group(1)}"
+    if any(term in lowered for term in (" going to ", " going on ", " retreat ", " trip ")):
+        return "travel"
+    return None
+
+
+def _extract_explicit_memory(user_text: str) -> tuple[str, str] | None:
+    lowered = user_text.lower().strip()
+    if any(phrase in lowered for phrase in FORGET_PHRASES):
+        return None
+    content = user_text.strip()
+    for prefix in EXPLICIT_MEMORY_PREFIXES:
+        if lowered.startswith(prefix):
+            content = content[len(prefix):].strip(" .,:;")
+            break
+    else:
+        durable_markers = (
+            "i prefer ", "i hate ", "i don't like ", "i do not like ",
+            "i don't live ", "i do not live ", "my ", "i'm going to ", "i am going to ", "i work ", "i live ",
+            "from now on ",
+        )
+        if not any(lowered.startswith(marker) for marker in durable_markers):
+            return None
+    if not content:
+        return None
+    key = _memory_key(f" {content.lower()} ")
+    category = (
+        "preference" if key == "preference"
+        else "relationship" if key and key.startswith("relationship:")
+        else "work" if key == "work"
+        else "travel" if key == "travel"
+        else "personal"
+    )
+    return category, content
+
+
 def process_message(user_text: str) -> str:
     """Process and log one user message through Sheila's existing workflow."""
     lowered = user_text.lower()
     route = route_request(user_text)
+    explicit_memory = _extract_explicit_memory(user_text)
+    if explicit_memory:
+        category, content = explicit_memory
+        key = _memory_key(f" {content.lower()} ")
+        memory.remember(
+            category,
+            content,
+            source="user",
+            importance=5,
+            metadata={"explicit": True, **({"memory_key": key} if key else {})},
+        )
+    if any(phrase in lowered for phrase in FORGET_PHRASES):
+        memory.forget_latest_structured(source="user")
     if _is_morning_protocol_trigger(user_text):
         reply = briefing.build_morning_briefing()
     elif any(phrase in lowered for phrase in MEETING_START_PHRASES):

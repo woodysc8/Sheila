@@ -56,6 +56,20 @@ class StructuredMemoryTests(unittest.TestCase):
         self.assertIn("Iris: Hello there", context)
         self.assertEqual(memory.get_structured_context(), "No structured memories yet.")
 
+    def test_keyed_correction_supersedes_previous_fact(self):
+        memory.remember("personal", "Sam lives in Maryland.", "user", metadata={"memory_key": "residence"})
+        memory.remember("personal", "Sam lives in Providence.", "user", metadata={"memory_key": "residence"})
+
+        memories = memory.recall("Where does Sam live?")
+        self.assertEqual(len(memories), 1)
+        self.assertEqual(memories[0]["content"], "Sam lives in Providence.")
+
+    def test_work_location_is_not_retrieved_as_residence_fact(self):
+        memory.remember("work", "Sam works remotely from Maryland.", "user", metadata={"memory_key": "work"})
+
+        self.assertEqual(memory.recall("Does Sam live in Maryland?"), [])
+        self.assertEqual(memory.recall("Where does Sam work?")[0]["content"], "Sam works remotely from Maryland.")
+
 
 if __name__ == "__main__":
     unittest.main()
