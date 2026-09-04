@@ -89,6 +89,30 @@ python ingest.py
 That makes Sheila pull the Drive files into the same local knowledge vector store
 it already uses for background questions and client context.
 
+## Second Brain storage
+
+The Second Brain keeps two deliberately separate stores: SQLite contains
+conversation exchanges and structured memories (facts, preferences, people,
+projects, and decisions), while Chroma contains document chunks and Gemini
+embeddings. The `Brain` facade in `brain.py` provides the common interface
+without flattening documents into structured memory.
+
+Each structured memory records its category, provenance source, optional source
+identifier, importance, timestamps, and JSON metadata. Existing `exchanges`
+conversation history is retained. Retrieval is bounded and uses simple
+structured/text matching; it does not add an LLM call.
+
+### Render persistence warning
+
+`config.py` stores SQLite at `data/memory.db` and Chroma at `data/chroma`.
+These are local filesystem paths, and this repository has no Render persistent
+disk configuration. Render's ephemeral filesystem does not guarantee either
+store survives a service restart, deploy, rebuild, or instance replacement.
+The current deployment therefore must be treated as non-durable for memory and
+document indexes. Attach and mount a Render persistent disk, or later provide
+a durable SQLite/Chroma-compatible storage service, before relying on this data
+in production. The Brain interface keeps that future backend migration local.
+
 ## What's next
 Once this feels good day-to-day:
 1. Swap SPACE-hold for wake-word detection (Picovoice Porcupine) — the

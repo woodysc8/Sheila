@@ -183,7 +183,7 @@ class ZavuIntegrationTests(unittest.TestCase):
         self.assertEqual(
             [call.args[0] for call in log.call_args_list],
             [
-                "Event passed the inbound WhatsApp text extraction check",
+                "Event passed the inbound text extraction check",
                 "Sheila process_message started",
                 "Sheila process_message completed successfully",
                 "Zavu outbound send started",

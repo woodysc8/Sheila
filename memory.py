@@ -9,6 +9,7 @@ that isn't in the recent window).
 
 import sqlite3
 import os
+import json
 from datetime import datetime
 import config
 
@@ -34,8 +35,123 @@ def init_db():
             delivered INTEGER DEFAULT 0
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS structured_memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT NOT NULL,
+            content TEXT NOT NULL,
+            source TEXT NOT NULL,
+            source_id TEXT,
+            importance INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            metadata TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
     conn.commit()
     conn.close()
+
+
+def _connect():
+    os.makedirs(os.path.dirname(config.DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _memory_row(row):
+    item = dict(row)
+    try:
+        item["metadata"] = json.loads(item["metadata"] or "{}")
+    except (TypeError, ValueError):
+        item["metadata"] = {}
+    return item
+
+
+def remember(category: str, content: str, source: str, source_id: str = None,
+             importance: int = 0, metadata: dict = None) -> dict:
+    """Persist one structured fact while keeping conversation exchanges separate."""
+    init_db()
+    now = datetime.now().isoformat()
+    conn = _connect()
+    cursor = conn.execute(
+        """INSERT INTO structured_memories
+           (category, content, source, source_id, importance, created_at, updated_at, metadata)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (category, content, source, source_id, int(importance), now, now,
+         json.dumps(metadata or {})),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM structured_memories WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    conn.close()
+    return _memory_row(row)
+
+
+def recall(query: str = "", category: str = None, limit: int = 10) -> list[dict]:
+    """Return bounded structured memories using simple reliable text matching."""
+    init_db()
+    conn = _connect()
+    clauses, params = [], []
+    if category:
+        clauses.append("category = ?")
+        params.append(category)
+    words = [word.lower() for word in query.split() if len(word) >= 3]
+    if words:
+        clauses.append("(" + " OR ".join("LOWER(content) LIKE ?" for _ in words) + ")")
+        params.extend(f"%{word}%" for word in words)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = conn.execute(
+        "SELECT * FROM structured_memories" + where +
+        " ORDER BY importance DESC, updated_at DESC LIMIT ?", (*params, limit)
+    ).fetchall()
+    conn.close()
+    return [_memory_row(row) for row in rows]
+
+
+def update(memory_id: int, **changes) -> dict:
+    """Update a structured memory and preserve its original creation time."""
+    allowed = {"category", "content", "source", "source_id", "importance", "metadata"}
+    values = {key: value for key, value in changes.items() if key in allowed}
+    if not values:
+        raise ValueError("At least one memory field is required")
+    if "metadata" in values:
+        values["metadata"] = json.dumps(values["metadata"] or {})
+    values["updated_at"] = datetime.now().isoformat()
+    init_db()
+    conn = _connect()
+    assignments = ", ".join(f"{key} = ?" for key in values)
+    cursor = conn.execute(
+        f"UPDATE structured_memories SET {assignments} WHERE id = ?",
+        (*values.values(), memory_id),
+    )
+    if cursor.rowcount == 0:
+        conn.close()
+        raise KeyError(memory_id)
+    conn.commit()
+    row = conn.execute("SELECT * FROM structured_memories WHERE id = ?", (memory_id,)).fetchone()
+    conn.close()
+    return _memory_row(row)
+
+
+def forget(memory_id: int) -> bool:
+    """Delete one structured memory by id."""
+    init_db()
+    conn = _connect()
+    cursor = conn.execute("DELETE FROM structured_memories WHERE id = ?", (memory_id,))
+    conn.commit()
+    conn.close()
+    return cursor.rowcount > 0
+
+
+def get_structured_context(query: str = "", limit: int = 8) -> str:
+    items = recall(query=query, limit=limit)
+    if not items:
+        return "No structured memories yet."
+    lines = ["Structured memories:"]
+    for item in items:
+        provenance = item["source"] + (f"/{item['source_id']}" if item["source_id"] else "")
+        lines.append(f"- [{item['category']}; from {provenance}] {item['content']}")
+    return "\n".join(lines)
 
 
 def queue_notification(source: str, summary: str):

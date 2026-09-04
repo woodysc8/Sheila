@@ -9,11 +9,41 @@ import requests
 
 import config
 import memory
+import knowledge
 
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 OPENAI_NOT_CONFIGURED = "OpenAI is not configured. Add the OpenAI API key to the environment before using Sheila."
 OPENAI_REQUEST_FAILED = "OpenAI couldn't respond right now. Check the API configuration and connection, then try again."
+
+
+class Brain:
+    """Unified facade over structured memory, conversation memory, and documents."""
+
+    def remember(self, category: str, content: str, source: str, source_id: str = None,
+                 importance: int = 0, metadata: dict = None) -> dict:
+        return memory.remember(category, content, source, source_id, importance, metadata)
+
+    def recall(self, query: str = "", category: str = None, limit: int = 10) -> list[dict]:
+        return memory.recall(query, category, limit)
+
+    def update(self, memory_id: int, **changes) -> dict:
+        return memory.update(memory_id, **changes)
+
+    def forget(self, memory_id: int) -> bool:
+        return memory.forget(memory_id)
+
+    def search_documents(self, question: str, top_k: int = 4) -> str:
+        return knowledge.search_documents(question, top_k=top_k)
+
+    def ingest_document(self, doc_id: str, text: str, source_name: str):
+        return knowledge.ingest_document(doc_id, text, source_name)
+
+    def get_memory_context(self, query: str = "") -> str:
+        return f"{memory.get_context(current_query=query)}\n\n{memory.get_structured_context(query=query)}"
+
+
+brain = Brain()
 
 
 def _configured_api_key() -> str:
@@ -77,7 +107,7 @@ Content: {body[:1500]}
 
 def think(user_text: str, context: str = "") -> str:
     """Use OpenAI to respond while preserving the established call signature."""
-    memory_context = memory.get_context(current_query=user_text)
+    memory_context = brain.get_memory_context(query=user_text)
     pending = memory.get_pending_notifications()
     if pending:
         memory_context = f"{memory_context}\n\nPending notifications:\n" + "\n".join(

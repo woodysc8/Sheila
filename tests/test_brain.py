@@ -5,6 +5,29 @@ import brain
 
 
 class BrainOpenAITests(unittest.TestCase):
+    def test_brain_facade_delegates_to_memory_and_knowledge_backends(self):
+        facade = brain.Brain()
+        memory_item = {"id": 1, "content": "A fact"}
+        with patch.object(brain.memory, "remember", return_value=memory_item) as remember, \
+             patch.object(brain.memory, "recall", return_value=[memory_item]) as recall, \
+             patch.object(brain.memory, "update", return_value=memory_item) as update, \
+             patch.object(brain.memory, "forget", return_value=True) as forget, \
+             patch.object(brain.knowledge, "search_documents", return_value="document") as search, \
+             patch.object(brain.knowledge, "ingest_document") as ingest:
+            self.assertEqual(facade.remember("fact", "A fact", "manual"), memory_item)
+            self.assertEqual(facade.recall("fact"), [memory_item])
+            self.assertEqual(facade.update(1, content="Updated"), memory_item)
+            self.assertTrue(facade.forget(1))
+            self.assertEqual(facade.search_documents("question"), "document")
+            facade.ingest_document("doc-1", "text", "upload.txt")
+
+        remember.assert_called_once_with("fact", "A fact", "manual", None, 0, None)
+        recall.assert_called_once_with("fact", None, 10)
+        update.assert_called_once_with(1, content="Updated")
+        forget.assert_called_once_with(1)
+        search.assert_called_once_with("question", top_k=4)
+        ingest.assert_called_once_with("doc-1", "text", "upload.txt")
+
     def test_think_uses_openai_responses_with_retrieved_context(self):
         response = Mock()
         response.json.return_value = {"output_text": "Your calendar is clear."}

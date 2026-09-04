@@ -64,6 +64,11 @@ def add_document(doc_id: str, text: str, source_name: str):
     print(f"[knowledge] Indexed {len(chunks)} chunks from {source_name}")
 
 
+def ingest_document(doc_id: str, text: str, source_name: str):
+    """Backend-neutral name for document ingestion."""
+    return add_document(doc_id, text, source_name)
+
+
 def query(question: str, top_k: int = 4) -> str:
     """Returns the most relevant chunks as a formatted string, or "" if
     nothing's indexed yet / the query fails. Called from brain.py on every
@@ -83,3 +88,8 @@ def query(question: str, top_k: int = 4) -> str:
     except Exception as e:
         print(f"[knowledge] Query failed: {e}")
         return ""
+
+
+def search_documents(question: str, top_k: int = 4) -> str:
+    """Backend-neutral name for document retrieval."""
+    return query(question, top_k=top_k)
