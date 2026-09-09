@@ -149,6 +149,22 @@ class PersonalCalendarInterfaceTests(unittest.TestCase):
         event = calendar_store.list_events("2026-09-10T00:00:00", "2026-09-11T00:00:00", "America/New_York")[0]
         self.assertIn("T20:00:00-04:00", event["start"])
 
+    def test_natural_friday_update_persists_and_cleans_title(self):
+        personal_calendar.handle_personal_calendar_request("Nora is coming Friday at 7.", NOW)
+        created = calendar_store.list_events("2026-09-11T00:00:00", "2026-09-12T00:00:00", "America/New_York")[0]
+        self.assertEqual(created["title"], "Nora coming")
+
+        response = personal_calendar.handle_personal_calendar_request("Nora is actually coming at 8.", NOW)
+        self.assertIn("8:00 PM", response)
+
+        persisted = calendar_store.get_event(created["id"])
+        self.assertEqual(persisted["title"], "Nora coming")
+        self.assertIn("T20:00:00-04:00", persisted["start"])
+        self.assertIn("T21:00:00-04:00", persisted["end"])
+        listed = calendar_store.list_events("2026-09-11T00:00:00", "2026-09-12T00:00:00", "America/New_York")
+        self.assertEqual([(event["id"], event["start"], event["end"]) for event in listed],
+                         [(created["id"], persisted["start"], persisted["end"])])
+
     def test_workflow_handles_natural_plan_without_llm(self):
         response_handler = Mock()
         result = handle_request("Nora is coming Thursday at 7.", response_handler)

@@ -98,7 +98,8 @@ def _plan_title(text: str) -> str:
     cleaned = re.sub(r"\b(?:next|this)\s+weekend\b", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"^(?:actually\s+)?(?:i\s+have|i'm\s+going\s+to|i am\s+going\s+to|my|meeting)\s+", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s+(?:is|are)\s+(?:actually\s+)?(?:coming|going)(?:\s+over)?\b", " coming", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .,!?\")")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"[\s.?!]+$", "", cleaned)
     if cleaned.lower().startswith("dinner with ") or cleaned.lower().startswith("meeting "):
         return cleaned
     if re.search(r"\b(?:coming|dinner|appointment|game|trivia|plans?)\b", cleaned, re.IGNORECASE):
@@ -188,8 +189,15 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
             end = datetime.fromisoformat(str(event["end"])).astimezone(zone)
             new_time = _time_from_text(text, default_meridiem="pm" if start.hour >= 12 else "am")
             moved_start = start.replace(hour=new_time.hour, minute=new_time.minute, second=0, microsecond=0)
-            update_personal_calendar_event(int(event["id"]), start=moved_start.isoformat(), end=(moved_start + (end - start)).isoformat())
-            return f"Updated it to {_display_time(moved_start)}."
+            updated = update_personal_calendar_event(
+                int(event["id"]),
+                start=moved_start.isoformat(),
+                end=(moved_start + (end - start)).isoformat(),
+            )
+            if updated is None:
+                return "I couldn't update that personal-calendar event."
+            persisted_start = datetime.fromisoformat(str(updated["start"])).astimezone(zone)
+            return f"Updated it to {_display_time(persisted_start)}."
         if len(matches) > 1:
             return "Which matching personal-calendar event do you mean?"
     if _natural_lookup(text):
