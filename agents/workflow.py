@@ -11,6 +11,7 @@ import config
 from .router import route_request
 from integrations import asana, calendar, drive, gmail
 from integrations.google_auth import GoogleAuthError
+import personal_calendar
 
 
 class SheilaWorkflowState(TypedDict, total=False):
@@ -21,6 +22,7 @@ class SheilaWorkflowState(TypedDict, total=False):
     google_context: str
     unavailable_response: str
     asana_direct_response: str
+    personal_calendar_response: str
 
 
 def routing_node(state: SheilaWorkflowState) -> dict[str, object]:
@@ -172,6 +174,8 @@ def google_data_node(state: SheilaWorkflowState) -> dict[str, str]:
     capability = state["route"].get("capability")
     user_text = state["user_text"]
     try:
+        if capability == "personal_calendar":
+            return {"personal_calendar_response": personal_calendar.handle_personal_calendar_request(user_text)}
         if capability == "gmail":
             messages = gmail.search_messages(_gmail_query(user_text), limit=10)
             lines = [f"- From: {m['sender']} | Subject: {m['subject']} | Date: {m['date']} | Preview: {m['snippet'] or m['body'][:500]}" for m in messages]
@@ -228,9 +232,15 @@ def asana_response_node(state: SheilaWorkflowState) -> dict[str, str]:
     return {"response": state["asana_direct_response"]}
 
 
+def personal_calendar_response_node(state: SheilaWorkflowState) -> dict[str, str]:
+    return {"response": state["personal_calendar_response"]}
+
+
 def _after_google_data(state: SheilaWorkflowState) -> str:
     if state.get("unavailable_response"):
         return "unavailable"
+    if state.get("personal_calendar_response"):
+        return "personal_calendar_response"
     return "asana_response" if state.get("asana_direct_response") else "respond"
 
 
@@ -241,13 +251,15 @@ def build_workflow():
     graph.add_node("google_data", google_data_node)
     graph.add_node("google_unavailable", google_unavailable_node)
     graph.add_node("asana_response", asana_response_node)
+    graph.add_node("personal_calendar_response", personal_calendar_response_node)
     graph.add_node("sheila_response", sheila_response_node)
     graph.add_edge(START, "route")
     graph.add_conditional_edges("route", lambda state: "google_data" if state["route"].get("capability") else "sheila_response")
-    graph.add_conditional_edges("google_data", _after_google_data, {"respond": "sheila_response", "unavailable": "google_unavailable", "asana_response": "asana_response"})
+    graph.add_conditional_edges("google_data", _after_google_data, {"respond": "sheila_response", "unavailable": "google_unavailable", "asana_response": "asana_response", "personal_calendar_response": "personal_calendar_response"})
     graph.add_edge("sheila_response", END)
     graph.add_edge("google_unavailable", END)
     graph.add_edge("asana_response", END)
+    graph.add_edge("personal_calendar_response", END)
     return graph.compile()
 
 

@@ -107,6 +107,34 @@ identifier, importance, timestamps, and JSON metadata. Existing `exchanges`
 conversation history is retained. Retrieval is bounded and uses simple
 structured/text matching; it does not add an LLM call.
 
+## Sheila personal calendar
+
+The personal calendar is separate from the read-only Google/work calendar. It
+uses the `calendar_events` table in Sheila's SQLite database, configured by
+`SHEILA_DB_PATH` or defaulting to `data/memory.db`. Times are timezone-aware
+and use `SHEILA_TIMEZONE` (default `America/New_York`).
+
+When the existing webhook server is running, open `/calendar`. Its JSON API is:
+
+- `GET /api/calendar/events?start=...&end=...&timezone=...`
+- `GET /api/calendar/events/{id}`
+- `POST /api/calendar/events`
+- `PATCH /api/calendar/events/{id}`
+- `DELETE /api/calendar/events/{id}`
+
+Sheila's internal interface is in `personal_calendar.py`: read, create, update,
+and delete functions are used by deterministic personal-calendar commands and
+do not call the Google Calendar integration. Explicit commands such as “Add
+trivia night tomorrow at 8 PM” can mutate the calendar; ambiguous requests are
+left unchanged and ask for the missing date or time.
+
+For local development, SQLite survives browser refreshes and process restarts
+because it is stored on disk. Render's default filesystem is ephemeral. Set
+`SHEILA_DB_PATH` to a file on an attached Render persistent disk for production
+durability; without that disk, calendar data may be lost on redeploy or instance
+replacement. The current single-process SQLite design is not suitable for
+multiple horizontally scaled instances.
+
 ### Render persistence warning
 
 `config.py` stores SQLite at `data/memory.db` and Chroma at `data/chroma`.

@@ -35,6 +35,12 @@ RESEARCH_TERMS = (
 )
 GMAIL_TERMS = ("email", "emails", "mail", "inbox", "gmail")
 CALENDAR_TERMS = ("calendar", "meeting", "meetings", "agenda", "when am i free", "when i'm free", "am i free")
+PERSONAL_CALENDAR_TERMS = ("personal calendar", "my personal calendar")
+PERSONAL_CALENDAR_COMMAND_PATTERN = re.compile(
+    r"(?:\b(?:cancel|delete|remove)\b.*|\b(?:add|schedule|put|create|book|move|reschedule|change|update)\b"
+    r".*\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at|to)\b)",
+    re.IGNORECASE,
+)
 DRIVE_TERMS = ("drive", "document", "documents", "file", "files", "folder")
 ASANA_TERMS = ("asana", "overdue tasks", "what's overdue", "what is overdue", "show me my overdue tasks")
 FREE_TIME_PATTERN = re.compile(r"\bfree\b.*\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|afternoon|evening|today|tomorrow)\b")
@@ -56,6 +62,10 @@ def route_request(user_text: str) -> RoutingDecision:
     normalized = user_text.lower()
     if _matches(normalized, ASANA_TERMS) or ASANA_TASK_PATTERN.search(normalized):
         return RoutingDecision("Sheila", "asana_read", False, "This request needs read-only Asana data.", "asana")
+    non_calendar_mutation_terms = ("file", "document", "task", "email", "memory")
+    is_non_calendar_mutation = any(term in normalized for term in non_calendar_mutation_terms)
+    if _matches(normalized, PERSONAL_CALENDAR_TERMS) or (PERSONAL_CALENDAR_COMMAND_PATTERN.search(normalized) and not is_non_calendar_mutation):
+        return RoutingDecision("Sheila", "personal_calendar", False, "This request needs Sheila's personal calendar.", "personal_calendar")
     # Google data is a Sheila capability, not a separate personality agent.
     if _matches(normalized, GMAIL_TERMS) or GMAIL_FOLLOWUP_PATTERN.search(normalized):
         return RoutingDecision("Sheila", "gmail_read", False, "This request needs read-only Gmail data.", "gmail")

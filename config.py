@@ -164,7 +164,7 @@ GOOGLE_OAUTH_CREDENTIALS_FILE = os.environ.get(
 # ---------------------------------------------------------------------------
 # MEMORY
 # ---------------------------------------------------------------------------
-DB_PATH = os.path.join(os.path.dirname(__file__), "data", "memory.db")
+DB_PATH = os.environ.get("SHEILA_DB_PATH", os.path.join(os.path.dirname(__file__), "data", "memory.db"))
 MEMORY_CONTEXT_TURNS = 6
 
 # ---------------------------------------------------------------------------
