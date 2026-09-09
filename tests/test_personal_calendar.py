@@ -49,6 +49,20 @@ class PersonalCalendarStoreTests(unittest.TestCase):
         reopened.close()
         self.assertEqual(calendar_store.list_events("2026-09-10T00:00:00", "2026-09-11T00:00:00", "America/New_York"), [])
 
+    def test_natural_update_survives_fresh_connection(self):
+        event = personal_calendar.handle_personal_calendar_request("Nora is coming Friday at 7.", NOW)
+        self.assertEqual(event, "Got it.")
+        stored = calendar_store.list_events("2026-09-11T00:00:00", "2026-09-12T00:00:00", "America/New_York")[0]
+        response = personal_calendar.handle_personal_calendar_request("Nora is actually coming at 8.", NOW)
+        self.assertIn("8:00 PM", response)
+        reopened = calendar_store._connect()
+        reopened.close()
+        read_back = calendar_store.get_event(stored["id"])
+        listed = calendar_store.list_events("2026-09-11T00:00:00", "2026-09-12T00:00:00", "America/New_York")
+        self.assertIn("T20:00:00-04:00", read_back["start"])
+        self.assertIn("T21:00:00-04:00", read_back["end"])
+        self.assertEqual(listed[0]["start"], read_back["start"])
+
     def test_timezone_conversion_and_invalid_data(self):
         event = calendar_store.create_event(
             "UTC event", "2026-09-10T00:00:00Z", "2026-09-10T01:00:00Z", timezone="America/New_York"

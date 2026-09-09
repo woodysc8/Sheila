@@ -12,6 +12,7 @@ from .router import route_request
 from integrations import asana, calendar, drive, gmail
 from integrations.google_auth import GoogleAuthError
 import personal_calendar
+import sheila_tasks
 
 
 class SheilaWorkflowState(TypedDict, total=False):
@@ -23,6 +24,8 @@ class SheilaWorkflowState(TypedDict, total=False):
     unavailable_response: str
     asana_direct_response: str
     personal_calendar_response: str
+    sheila_task_response: str
+    operational_response: str
 
 
 def routing_node(state: SheilaWorkflowState) -> dict[str, object]:
@@ -142,6 +145,45 @@ def _is_client_relationship_question(user_text: str) -> bool:
     return any(phrase in text for phrase in ("which clients", "what clients", "who are our clients", "companies are clients", "does team networth serve", "clients does"))
 
 
+def _timed_calendar_events(events: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [event for event in events if len(str(event.get("start", ""))) > 10 and len(str(event.get("end", ""))) > 10]
+
+
+def _format_work_events(events: list[dict[str, str]]) -> str:
+    timed = _timed_calendar_events(events)
+    lines = [f"- {event['start']} to {event['end']}: {event['title']}" + (f" ({event['location']})" if event.get("location") else "") for event in timed]
+    return "[WORK CALENDAR RESULTS]\n" + ("\n".join(lines) if lines else "No timed work events found.")
+
+
+def _format_personal_events(events: list[dict[str, object]]) -> str:
+    lines = [f"- {event['start']} to {event['end']}: {event['title']}" for event in events]
+    return "[PERSONAL CALENDAR RESULTS]\n" + ("\n".join(lines) if lines else "No personal events found.")
+
+
+def _label_personal_response(response: str) -> str:
+    if response.startswith("Personal calendar:\n"):
+        return "[PERSONAL CALENDAR RESULTS]\n" + response.split("\n", 1)[1]
+    return "[PERSONAL CALENDAR RESULTS]\n" + response
+
+
+def _is_natural_calendar_lookup(user_text: str) -> bool:
+    return bool(re.search(r"\b(?:what do i have|what am i doing|what(?:'s| is) happening|coming up)\b", user_text, re.IGNORECASE))
+
+
+def _operational_summary(user_text: str) -> str:
+    start, end = _calendar_range(user_text)
+    due_date = start.date().isoformat()
+    tasks = sheila_tasks.list_tasks(due_date=due_date)
+    personal = personal_calendar.get_personal_calendar_events(start, end)
+    try:
+        work = _timed_calendar_events(calendar.get_events(start, end, limit=20))
+    except GoogleAuthError:
+        work = []
+    sections = ["[REMINDERS / TASKS]\n" + ("\n".join(f"- {task['text']} ({task['due_at'] or task['due_date']})" for task in tasks) if tasks else "No pending reminders due in this range."),
+                _format_personal_events(personal), _format_work_events(work)]
+    return "\n\n".join(sections)
+
+
 def _is_due_today_task(task: dict[str, object], current_date: date) -> bool:
     if task.get("completed"):
         return False
@@ -175,7 +217,20 @@ def google_data_node(state: SheilaWorkflowState) -> dict[str, str]:
     user_text = state["user_text"]
     try:
         if capability == "personal_calendar":
-            return {"personal_calendar_response": personal_calendar.handle_personal_calendar_request(user_text)}
+            response = personal_calendar.handle_personal_calendar_request(user_text)
+            if _is_natural_calendar_lookup(user_text) and "personal calendar" not in user_text.lower():
+                start, end = _calendar_range(user_text)
+                response = _label_personal_response(response)
+                try:
+                    work = calendar.get_events(start, end, limit=20)
+                    response += "\n\n" + _format_work_events(work)
+                except GoogleAuthError:
+                    pass
+            return {"personal_calendar_response": response}
+        if capability == "sheila_task":
+            return {"sheila_task_response": sheila_tasks.handle_request(user_text)}
+        if capability == "operational_summary":
+            return {"operational_response": _operational_summary(user_text)}
         if capability == "gmail":
             messages = gmail.search_messages(_gmail_query(user_text), limit=10)
             lines = [f"- From: {m['sender']} | Subject: {m['subject']} | Date: {m['date']} | Preview: {m['snippet'] or m['body'][:500]}" for m in messages]
@@ -183,9 +238,11 @@ def google_data_node(state: SheilaWorkflowState) -> dict[str, str]:
         if capability == "calendar":
             start, end = _calendar_range(user_text)
             events = calendar.get_events(start, end, limit=20)
-            lines = [f"- {e['start']} to {e['end']}: {e['title']}" + (f" ({e['location']})" if e['location'] else "") for e in events]
-            status = f"Status: successful with {len(events)} event(s). [CALENDAR RESULTS] is authoritative for this range."
-            return {"google_context": f"[CALENDAR RESULTS]\nRange: {start.isoformat()} through {end.isoformat()}\n{status}\n" + ("\n".join(lines) if lines else "No events found.")}
+            personal = personal_calendar.get_personal_calendar_events(start, end)
+            timed_events = _timed_calendar_events(events)
+            work_context = _format_work_events(timed_events)
+            status = f"Range: {start.isoformat()} through {end.isoformat()}. Status: successful with {len(timed_events)} event(s). [CALENDAR RESULTS] is authoritative for this range."
+            return {"google_context": f"[CALENDAR RESULTS]\n{status}\n{work_context}\n\n{_format_personal_events(personal)}"}
         if capability == "drive":
             files = drive.search_files(_drive_query(user_text), limit=10)
             lines = [f"- {f['name']} | {f['mime_type']} | modified {f['modified_time']} | id {f['id']}" for f in files]
@@ -236,11 +293,23 @@ def personal_calendar_response_node(state: SheilaWorkflowState) -> dict[str, str
     return {"response": state["personal_calendar_response"]}
 
 
+def sheila_task_response_node(state: SheilaWorkflowState) -> dict[str, str]:
+    return {"response": state["sheila_task_response"]}
+
+
+def operational_response_node(state: SheilaWorkflowState) -> dict[str, str]:
+    return {"response": state["operational_response"]}
+
+
 def _after_google_data(state: SheilaWorkflowState) -> str:
     if state.get("unavailable_response"):
         return "unavailable"
     if state.get("personal_calendar_response"):
         return "personal_calendar_response"
+    if state.get("sheila_task_response"):
+        return "sheila_task_response"
+    if state.get("operational_response"):
+        return "operational_response"
     return "asana_response" if state.get("asana_direct_response") else "respond"
 
 
@@ -252,14 +321,18 @@ def build_workflow():
     graph.add_node("google_unavailable", google_unavailable_node)
     graph.add_node("asana_response", asana_response_node)
     graph.add_node("personal_calendar_response", personal_calendar_response_node)
+    graph.add_node("sheila_task_response", sheila_task_response_node)
+    graph.add_node("operational_response", operational_response_node)
     graph.add_node("sheila_response", sheila_response_node)
     graph.add_edge(START, "route")
     graph.add_conditional_edges("route", lambda state: "google_data" if state["route"].get("capability") else "sheila_response")
-    graph.add_conditional_edges("google_data", _after_google_data, {"respond": "sheila_response", "unavailable": "google_unavailable", "asana_response": "asana_response", "personal_calendar_response": "personal_calendar_response"})
+    graph.add_conditional_edges("google_data", _after_google_data, {"respond": "sheila_response", "unavailable": "google_unavailable", "asana_response": "asana_response", "personal_calendar_response": "personal_calendar_response", "sheila_task_response": "sheila_task_response", "operational_response": "operational_response"})
     graph.add_edge("sheila_response", END)
     graph.add_edge("google_unavailable", END)
     graph.add_edge("asana_response", END)
     graph.add_edge("personal_calendar_response", END)
+    graph.add_edge("sheila_task_response", END)
+    graph.add_edge("operational_response", END)
     return graph.compile()
 
 

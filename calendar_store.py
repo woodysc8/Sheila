@@ -1,6 +1,8 @@
 """Persistent personal-calendar storage, separate from Google Calendar."""
 
 from datetime import datetime
+import json
+import os
 import sqlite3
 from zoneinfo import ZoneInfo
 
@@ -11,8 +13,15 @@ class CalendarError(ValueError):
     """Raised when a personal-calendar operation is invalid."""
 
 
+def _log(operation: str, **details: object) -> None:
+    payload = {"operation": operation, "pid": os.getpid(), "db_path": os.path.abspath(config.DB_PATH), **details}
+    print(f"[calendar_store] {json.dumps(payload, sort_keys=True, default=str)}", flush=True)
+
+
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(config.DB_PATH)
+    path = os.path.abspath(config.DB_PATH)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute(
         """CREATE TABLE IF NOT EXISTS calendar_events (
@@ -120,6 +129,7 @@ def list_events(start: str | datetime, end: str | datetime, timezone: str | None
 def update_event(event_id: int, **changes: object) -> dict[str, object] | None:
     existing = get_event(event_id)
     if existing is None:
+        _log("update_missing", event_id=event_id)
         return None
     allowed = {"title", "description", "start", "end", "timezone", "location"}
     unknown = set(changes) - allowed
@@ -136,9 +146,17 @@ def update_event(event_id: int, **changes: object) -> dict[str, object] | None:
     end = parse_datetime(str(changes.get("end", existing["end"])), timezone_name)
     if end <= start:
         raise CalendarError("Event end must be after its start.")
+    _log(
+        "update_requested",
+        event_id=event_id,
+        old_start=existing["start"],
+        old_end=existing["end"],
+        requested_start=start.isoformat(),
+        requested_end=end.isoformat(),
+    )
     now = datetime.now(_timezone(timezone_name)).isoformat()
     conn = _connect()
-    conn.execute(
+    cursor = conn.execute(
         """UPDATE calendar_events SET title = ?, description = ?, start_at = ?, end_at = ?,
            timezone = ?, location = ?, updated_at = ? WHERE id = ?""",
         (title.strip(), description, start.isoformat(), end.isoformat(), timezone_name, location, now, event_id),
@@ -146,7 +164,15 @@ def update_event(event_id: int, **changes: object) -> dict[str, object] | None:
     conn.commit()
     row = conn.execute("SELECT * FROM calendar_events WHERE id = ?", (event_id,)).fetchone()
     conn.close()
-    return _event(row)
+    persisted = _event(row) if row else None
+    _log(
+        "update_persisted",
+        event_id=event_id,
+        rows_updated=cursor.rowcount,
+        persisted_start=persisted["start"] if persisted else None,
+        persisted_end=persisted["end"] if persisted else None,
+    )
+    return persisted
 
 
 def delete_event(event_id: int) -> bool:

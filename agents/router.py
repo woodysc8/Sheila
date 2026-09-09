@@ -62,6 +62,12 @@ FREE_TIME_PATTERN = re.compile(r"\bfree\b.*\b(?:monday|tuesday|wednesday|thursda
 GMAIL_FOLLOWUP_PATTERN = re.compile(r"\bwhat did\s+[\w .'-]+\s+say\??$")
 DRIVE_RELATIONSHIP_PATTERN = re.compile(r"\b(?:which|what|who)\b.*\bclients?\b|\bcompanies\s+are\s+clients\b|\b(?:does|do)\b.*\bserve\b")
 ASANA_TASK_PATTERN = re.compile(r"\bwhat\s+(?:tasks?|do i)\b.*\bdue\s+today\b|\bwhat\s+do\s+i\s+have\s+due\s+today\b")
+REMINDER_REQUEST_PATTERN = re.compile(
+    r"\bremind me to\b|\b(?:cancel|complete|finish|mark|move|change|update)\s+(?:my\s+)?(?:reminder|task)\b|"
+    r"\b(?:what are my reminders|list my reminders|show my reminders|what do i need to get done)\b",
+    re.IGNORECASE,
+)
+OPERATIONAL_SUMMARY_PATTERN = re.compile(r"\bwhat needs to get done(?: today)?\b", re.IGNORECASE)
 
 
 def _matches(text: str, terms: tuple[str, ...]) -> bool:
@@ -77,6 +83,10 @@ def route_request(user_text: str) -> RoutingDecision:
     normalized = user_text.lower()
     if _matches(normalized, ASANA_TERMS) or ASANA_TASK_PATTERN.search(normalized):
         return RoutingDecision("Sheila", "asana_read", False, "This request needs read-only Asana data.", "asana")
+    if OPERATIONAL_SUMMARY_PATTERN.search(normalized):
+        return RoutingDecision("Sheila", "operational_summary", False, "This request needs Sheila's operational task and calendar summary.", "operational_summary")
+    if REMINDER_REQUEST_PATTERN.search(normalized) and not PERSONAL_PLAN_EXCLUSION_PATTERN.search(normalized):
+        return RoutingDecision("Sheila", "sheila_task", False, "This request needs Sheila's reminder and task store.", "sheila_task")
     non_calendar_mutation_terms = ("file", "document", "task", "email", "memory")
     is_non_calendar_mutation = any(term in normalized for term in non_calendar_mutation_terms)
     is_tentative_or_historical = PERSONAL_PLAN_EXCLUSION_PATTERN.search(normalized)

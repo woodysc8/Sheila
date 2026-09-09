@@ -1,11 +1,18 @@
 """Sheila-facing personal-calendar functions and deterministic commands."""
 
 from datetime import date, datetime, time, timedelta
+import json
+import os
 import re
 from zoneinfo import ZoneInfo
 
 import calendar_store
 import config
+
+
+def _log(operation: str, **details: object) -> None:
+    payload = {"operation": operation, "pid": os.getpid(), "db_path": os.path.abspath(config.DB_PATH), **details}
+    print(f"[personal_calendar] {json.dumps(payload, sort_keys=True, default=str)}", flush=True)
 
 
 def get_personal_calendar_events(start: datetime, end: datetime) -> list[dict[str, object]]:
@@ -124,13 +131,24 @@ def _natural_lookup(text: str) -> bool:
 def _find_events(title: str, now: datetime) -> list[dict[str, object]]:
     start = now - timedelta(days=366)
     end = now + timedelta(days=366)
-    return [event for event in get_personal_calendar_events(start, end) if title.lower() in str(event["title"]).lower()]
+    matches = [event for event in get_personal_calendar_events(start, end) if title.lower() in str(event["title"]).lower()]
+    _log("natural_event_match", event_ids=[event["id"] for event in matches])
+    return matches
 
 
 def _event_line(event: dict[str, object]) -> str:
     start = str(event["start"]).replace("T", " ")
     end = str(event["end"]).replace("T", " ")
     return f"- {event['title']}: {start} to {end} ({event['timezone']})"
+
+
+def _log_lookup(events: list[dict[str, object]]) -> None:
+    _log(
+        "natural_lookup_result",
+        event_ids=[event["id"] for event in events],
+        starts=[event["start"] for event in events],
+        ends=[event["end"] for event in events],
+    )
 
 
 def _display_time(value: datetime) -> str:
@@ -197,6 +215,12 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
             if updated is None:
                 return "I couldn't update that personal-calendar event."
             persisted_start = datetime.fromisoformat(str(updated["start"])).astimezone(zone)
+            _log(
+                "natural_update_readback",
+                event_id=updated["id"],
+                persisted_start=updated["start"],
+                persisted_end=updated["end"],
+            )
             return f"Updated it to {_display_time(persisted_start)}."
         if len(matches) > 1:
             return "Which matching personal-calendar event do you mean?"
@@ -204,6 +228,7 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
         named = re.search(r"\bwhen is\s+(.+?)(?:\?|$)", text, re.IGNORECASE)
         if named:
             matches = _find_events(named.group(1).strip(), current)
+            _log_lookup(matches)
             return "No personal-calendar events found." if not matches else "Personal calendar:\n" + "\n".join(_event_line(event) for event in matches)
         if "tomorrow" in lowered:
             start = datetime.combine(current.date() + timedelta(days=1), time.min, tzinfo=zone)
@@ -222,6 +247,7 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
         else:
             start = datetime.combine(current.date(), time.min, tzinfo=zone)
             events = get_personal_calendar_events(start, start + timedelta(days=30))
+        _log_lookup(events)
         return "No personal-calendar events found." if not events else "Personal calendar:\n" + "\n".join(_event_line(event) for event in events)
     if re.search(r"\b(?:add|schedule|put|create|book)\b", lowered):
         command = re.sub(r"^.*?\b(?:add|schedule|put|create|book)\s+(?:an?\s+)?", "", text, flags=re.IGNORECASE)

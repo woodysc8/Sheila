@@ -128,12 +128,26 @@ do not call the Google Calendar integration. Explicit commands such as “Add
 trivia night tomorrow at 8 PM” can mutate the calendar; ambiguous requests are
 left unchanged and ask for the missing date or time.
 
+Sheila reminders/tasks are stored in the same configured SQLite database in the
+`sheila_tasks` table. They support timed or date-only due values and pending,
+completed, and cancelled states. Notification delivery is not wired into this
+command path yet; the existing scheduler remains responsible for quiet-hours
+and meeting-mode checks.
+
 For local development, SQLite survives browser refreshes and process restarts
 because it is stored on disk. Render's default filesystem is ephemeral. Set
 `SHEILA_DB_PATH` to a file on an attached Render persistent disk for production
 durability; without that disk, calendar data may be lost on redeploy or instance
 replacement. The current single-process SQLite design is not suitable for
 multiple horizontally scaled instances.
+
+Run the production webhook as a single instance while using SQLite, and mount
+the persistent disk at the parent directory of `SHEILA_DB_PATH`. If multiple
+instances are serving traffic, each can otherwise have a different local SQLite
+file and one request can update a different database than the next lookup.
+Calendar update logs record only the process ID, resolved database path, event
+ID, and old/requested/persisted timestamps to diagnose that topology without
+logging message text.
 
 ### Render persistence warning
 
