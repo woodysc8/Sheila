@@ -37,8 +37,23 @@ GMAIL_TERMS = ("email", "emails", "mail", "inbox", "gmail")
 CALENDAR_TERMS = ("calendar", "meeting", "meetings", "agenda", "when am i free", "when i'm free", "am i free")
 PERSONAL_CALENDAR_TERMS = ("personal calendar", "my personal calendar")
 PERSONAL_CALENDAR_COMMAND_PATTERN = re.compile(
-    r"(?:\b(?:cancel|delete|remove)\b.*|\b(?:add|schedule|put|create|book|move|reschedule|change|update)\b"
+    r"(?:\b(?:cancel|delete|remove)\b.*|\b(?:is|are)\b.*\b(?:off|cancelled|canceled|anymore)\b|\b(?:add|schedule|put|create|book|move|reschedule|change|update)\b"
     r".*\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at|to)\b)",
+    re.IGNORECASE,
+)
+PERSONAL_CALENDAR_LOOKUP_PATTERN = re.compile(
+    r"\b(?:what do i have|what am i doing|what(?:'s| is) happening|when is|show me my|coming up|what(?:'s| is) on my)\b",
+    re.IGNORECASE,
+)
+PERSONAL_CALENDAR_PLAN_PATTERN = re.compile(
+    r"(?:\b(?:is coming|are coming|am going|is going|are going|dinner|appointment|game|trivia|plans?)\b"
+    r".*\b(?:today|tonight|tomorrow|next|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b|"
+    r"\b(?:i\s+)?have\s+(?:trivia|dinner|an?\s+appointment|plans?|[a-z]+\s+with\s+[a-z]+)\b"
+    r".*\b(?:today|tonight|tomorrow|next|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b)",
+    re.IGNORECASE,
+)
+PERSONAL_PLAN_EXCLUSION_PATTERN = re.compile(
+    r"\b(?:might|may|maybe|thinking about|wish|should i|if|went|came|last|yesterday)\b",
     re.IGNORECASE,
 )
 DRIVE_TERMS = ("drive", "document", "documents", "file", "files", "folder")
@@ -64,7 +79,14 @@ def route_request(user_text: str) -> RoutingDecision:
         return RoutingDecision("Sheila", "asana_read", False, "This request needs read-only Asana data.", "asana")
     non_calendar_mutation_terms = ("file", "document", "task", "email", "memory")
     is_non_calendar_mutation = any(term in normalized for term in non_calendar_mutation_terms)
-    if _matches(normalized, PERSONAL_CALENDAR_TERMS) or (PERSONAL_CALENDAR_COMMAND_PATTERN.search(normalized) and not is_non_calendar_mutation):
+    is_tentative_or_historical = PERSONAL_PLAN_EXCLUSION_PATTERN.search(normalized)
+    is_generic_calendar_request = _matches(normalized, CALENDAR_TERMS)
+    if (_matches(normalized, PERSONAL_CALENDAR_TERMS) or
+            (PERSONAL_CALENDAR_LOOKUP_PATTERN.search(normalized) and not is_generic_calendar_request) or
+            (not is_tentative_or_historical and not is_generic_calendar_request and
+             PERSONAL_CALENDAR_PLAN_PATTERN.search(normalized)) or
+            (not is_tentative_or_historical and PERSONAL_CALENDAR_COMMAND_PATTERN.search(normalized) and
+             not is_non_calendar_mutation and not is_generic_calendar_request)):
         return RoutingDecision("Sheila", "personal_calendar", False, "This request needs Sheila's personal calendar.", "personal_calendar")
     # Google data is a Sheila capability, not a separate personality agent.
     if _matches(normalized, GMAIL_TERMS) or GMAIL_FOLLOWUP_PATTERN.search(normalized):

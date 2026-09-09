@@ -5,13 +5,14 @@ import tempfile
 import threading
 import unittest
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
 import calendar_store
 import personal_calendar
 import zavu_webhook
 from agents.router import route_request
+from agents.workflow import handle_request
 
 
 EASTERN = ZoneInfo("America/New_York")
@@ -108,6 +109,51 @@ class PersonalCalendarInterfaceTests(unittest.TestCase):
         events = calendar_store.list_events("2026-09-10T00:00:00", "2026-09-11T00:00:00", "America/New_York")
         evening = next(event for event in events if event["title"] == "evening briefing")
         self.assertIn("T08:30:00-04:00", evening["start"])
+
+    def test_definite_natural_plan_creates_event_without_calendar_phrase(self):
+        self.assertEqual(route_request("Nora is coming Thursday at 7.").capability, "personal_calendar")
+        response = personal_calendar.handle_personal_calendar_request("Nora is coming Thursday at 7.", NOW)
+        self.assertEqual(response, "Got it.")
+        events = calendar_store.list_events("2026-09-10T00:00:00", "2026-09-11T00:00:00", "America/New_York")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["title"], "Nora coming")
+        self.assertIn("T19:00:00-04:00", events[0]["start"])
+        self.assertIn("T20:00:00-04:00", events[0]["end"])
+
+    def test_tentative_historical_and_hypothetical_plans_do_not_create(self):
+        for text in (
+            "Nora might come Thursday at 7.",
+            "Maybe dinner Friday at 7.",
+            "I'm thinking about going to Boston Saturday at 8.",
+            "If Nora comes Thursday at 7, we'll go out.",
+            "I went to trivia last Friday at 8.",
+        ):
+            self.assertFalse(route_request(text).capability == "personal_calendar", text)
+            personal_calendar.handle_personal_calendar_request(text, NOW)
+        self.assertEqual(calendar_store.list_events("2026-09-01T00:00:00", "2026-09-30T00:00:00", "America/New_York"), [])
+
+    def test_natural_lookup_and_cancellation(self):
+        personal_calendar.handle_personal_calendar_request("Dinner with Mom Saturday at 6.", NOW)
+        self.assertEqual(route_request("What do I have Saturday?").capability, "personal_calendar")
+        response = personal_calendar.handle_personal_calendar_request("What do I have Saturday?", NOW)
+        self.assertIn("Dinner with Mom", response)
+        personal_calendar.handle_personal_calendar_request("Dinner with Mom is off.", NOW)
+        self.assertEqual(calendar_store.list_events("2026-09-12T00:00:00", "2026-09-13T00:00:00", "America/New_York"), [])
+
+    def test_natural_update_and_named_lookup_preserve_event_context(self):
+        personal_calendar.handle_personal_calendar_request("Nora is coming Thursday at 7.", NOW)
+        response = personal_calendar.handle_personal_calendar_request("Nora is actually coming at 8.", NOW)
+        self.assertIn("8:00 PM", response)
+        lookup = personal_calendar.handle_personal_calendar_request("When is Nora?", NOW)
+        self.assertIn("Nora coming", lookup)
+        event = calendar_store.list_events("2026-09-10T00:00:00", "2026-09-11T00:00:00", "America/New_York")[0]
+        self.assertIn("T20:00:00-04:00", event["start"])
+
+    def test_workflow_handles_natural_plan_without_llm(self):
+        response_handler = Mock()
+        result = handle_request("Nora is coming Thursday at 7.", response_handler)
+        self.assertEqual(result["response"], "Got it.")
+        response_handler.assert_not_called()
 
 
 class PersonalCalendarApiTests(unittest.TestCase):
