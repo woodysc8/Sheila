@@ -9,11 +9,12 @@ import requests
 from integrations import asana, calendar, gmail
 from integrations.google_auth import GoogleAuthError
 import memory
+import config
 
 
 def _today_range(now: datetime | None = None) -> tuple[datetime, datetime]:
-    local_now = now or datetime.now().astimezone()
-    start = datetime.combine(local_now.date(), time.min, tzinfo=local_now.tzinfo)
+    local_now = (now or datetime.now(config.get_sheila_timezone())).astimezone(config.get_sheila_timezone())
+    start = datetime.combine(local_now.date(), time.min, tzinfo=config.get_sheila_timezone())
     return start, start + timedelta(days=1)
 
 
@@ -45,8 +46,8 @@ def _format_event(event: dict[str, str]) -> tuple[str, datetime | None]:
     start_at, end_at = _event_datetime(start_value), _event_datetime(event.get("end", ""))
     if len(start_value) == 10 or not start_at:
         return f"- All day: {title}{location}", None
-    local_start = start_at.astimezone()
-    local_end = end_at.astimezone() if end_at else None
+    local_start = start_at.astimezone(config.get_sheila_timezone())
+    local_end = end_at.astimezone(config.get_sheila_timezone()) if end_at else None
     end_text = local_end.strftime("%I:%M %p").lstrip("0") if local_end else ""
     return f"- {local_start.strftime('%I:%M %p').lstrip('0')}–{end_text}: {title}{location}", local_start
 
@@ -61,7 +62,7 @@ def _task_due_date(task: dict[str, object]) -> date | None:
     due_at = task.get("due_at")
     if isinstance(due_at, str) and due_at:
         try:
-            return datetime.fromisoformat(due_at.replace("Z", "+00:00")).astimezone().date()
+            return datetime.fromisoformat(due_at.replace("Z", "+00:00")).astimezone(config.get_sheila_timezone()).date()
         except ValueError:
             return None
     return None
@@ -77,13 +78,41 @@ def _format_task(task: dict[str, object]) -> str:
     return f"- {task.get('name', '(unnamed task)')} (due {due}){project}"
 
 
+def _task_priority(task: dict[str, object]) -> int:
+    priority = str(task.get("priority") or task.get("priority_label") or "").lower()
+    return 2 if priority in {"high", "urgent", "critical", "1"} else 1 if priority in {"medium", "normal", "2"} else 0
+
+
+def select_morning_tasks(tasks: list[dict[str, object]], today: date, limit: int | None = None) -> tuple[list[dict[str, object]], int]:
+    """Select a bounded, explainable set without changing the source task list."""
+    cap = limit or config.MORNING_ASANA_LIMIT
+    candidates = [task for task in tasks if not task.get("completed") and _task_due_date(task) and
+                  (_task_due_date(task) <= today + timedelta(days=1) or _task_priority(task) > 0)]
+
+    def score(task: dict[str, object]) -> tuple[int, int, str]:
+        due = _task_due_date(task)
+        age = (today - due).days if due else 0
+        if due == today:
+            urgency = 400
+        elif due == today + timedelta(days=1):
+            urgency = 300
+        elif due < today:
+            urgency = 350 if age <= 3 else 50
+        else:
+            urgency = 0
+        return urgency + _task_priority(task) * 100, -age, str(task.get("name", ""))
+
+    ranked = sorted(candidates, key=score, reverse=True)
+    return ranked[:cap], max(0, len(ranked) - cap)
+
+
 def _format_email(message: dict[str, str]) -> str:
     return f"- From: {message.get('sender', '')} | Subject: {message.get('subject', '(no subject)')} | Date: {message.get('date', '')}"
 
 
 def _message_local_date(message: dict[str, str]) -> date | None:
     try:
-        return parsedate_to_datetime(message.get("date", "")).astimezone().date()
+        return parsedate_to_datetime(message.get("date", "")).astimezone(config.get_sheila_timezone()).date()
     except (TypeError, ValueError, IndexError):
         return None
 
@@ -155,7 +184,28 @@ def _market_lines(message: dict[str, str], current_date: date) -> list[str]:
         lines.append(f"- {title}: {value}" if value else f"- {title}: not found in today's edition.")
     why = next((line.strip() for line in text.splitlines() if re.search(r"\b(?:because|as .*?(?:investors|markets)|after .*?(?:investors|markets))\b", line, re.I)), None)
     lines.append(f"- Why: {why}" if why else "- Why: not found in today's edition.")
+    developments = select_morning_brew_items(message)
+    if developments:
+        lines.append("- Key developments: " + " | ".join(developments))
     return lines
+
+
+def select_morning_brew_items(message: dict[str, str], limit: int = 3) -> list[str]:
+    """Return only conservative, high-signal factual newsletter lines."""
+    text = message.get("body", "")
+    signal_terms = ("fed", "inflation", "gdp", "jobs", "tariff", "oil", "earnings", "acquisition", "ipo", "bank", "regulator", "economy", "markets")
+    filler_terms = ("sponsor", "subscribe", "unsubscribe", "podcast", "quiz", "horoscope", "read more", "click here", "brought to you")
+    items = []
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip(" -*")
+        lowered = line.lower()
+        if not 20 <= len(line) <= 240 or any(term in lowered for term in filler_terms):
+            continue
+        if any(term in lowered for term in signal_terms) and line not in items:
+            items.append(line)
+        if len(items) >= limit:
+            break
+    return items
 
 
 def get_weather_summary() -> str:
@@ -202,16 +252,12 @@ def build_morning_briefing(now: datetime | None = None) -> str:
 
     parts.append("\nAsana:")
     try:
-        overdue = asana.get_overdue_tasks(limit=20, current_date=today)
         tasks = asana.get_tasks(limit=20)
-        task_groups = (
-            ("Overdue tasks", overdue, "No overdue tasks found."),
-            ("Tasks due today", _tasks_due_on(tasks, today), "No tasks due today."),
-            ("Tasks due tomorrow", _tasks_due_on(tasks, today + timedelta(days=1)), "No tasks due tomorrow."),
-        )
-        for label, matching, empty in task_groups:
-            parts.append(f"- {label}: {len(matching)}")
-            parts.extend(_format_task(task) for task in matching) if matching else parts.append(f"  {empty}")
+        selected, additional = select_morning_tasks(tasks, today)
+        parts.append(f"- Showing {len(selected)} relevant task(s)" if selected else "- No high-signal tasks found.")
+        parts.extend(_format_task(task) for task in selected)
+        if additional:
+            parts.append(f"- {additional} additional lower-signal task(s) remain available in Asana.")
     except asana.AsanaError:
         parts.append("- Unable to retrieve Asana right now.")
 

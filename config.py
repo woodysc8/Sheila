@@ -5,6 +5,7 @@ list of `set` commands to run before starting main.py / email_watcher.py.
 """
 
 import os
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()  # reads a local .env file (see .env.example) so you don't have
@@ -139,6 +140,19 @@ SLACK_KEYWORDS = ["urgent", "asap", "deadline"]
 # CALENDAR
 # ---------------------------------------------------------------------------
 CALENDAR_ICS_URL = os.environ.get("CALENDAR_ICS_URL", "PUT_YOUR_ICS_URL_HERE")
+SHEILA_TIMEZONE = os.environ.get("SHEILA_TIMEZONE", "America/New_York").strip() or "America/New_York"
+try:
+    MORNING_ASANA_LIMIT = max(1, int(os.environ.get("MORNING_ASANA_LIMIT", "5")))
+except ValueError:
+    MORNING_ASANA_LIMIT = 5
+
+
+def get_sheila_timezone() -> ZoneInfo:
+    """Return Sheila's configured IANA timezone, with a safe default."""
+    try:
+        return ZoneInfo(SHEILA_TIMEZONE)
+    except (KeyError, ValueError):
+        return ZoneInfo("America/New_York")
 
 # Authorized-user OAuth credentials used only by Sheila's read-only Google
 # integrations.  Keep the file local; it is intentionally ignored by git.

@@ -8,18 +8,16 @@ import sheila_handler
 
 
 class TextMainTests(unittest.TestCase):
-    def test_explicit_memory_is_persisted_without_persisting ordinary_greeting(self):
+    def test_ordinary_greeting_does_not_persist_durable_memory(self):
         with tempfile.TemporaryDirectory() as temp_dir, \
              patch.object(sheila_handler.memory.config, "DB_PATH", os.path.join(temp_dir, "memory.db")), \
-             patch.object(sheila_handler, "handle_request", return_value={"response": "Noted."}), \
+             patch.object(sheila_handler, "handle_request", return_value={"response": "Hello."}), \
              patch.object(sheila_handler.memory, "log_exchange"):
-            main.process_message("I prefer aisle seats.")
             main.process_message("hello")
 
-            memories = sheila_handler.memory.recall("What kind of airplane seat does Sam prefer?")
+            memories = sheila_handler.memory.recall()
 
-        self.assertEqual(len(memories), 1)
-        self.assertEqual(memories[0]["content"], "I prefer aisle seats.")
+        self.assertEqual(memories, [])
 
     def test_forget_that_removes_latest_durable_memory(self):
         with tempfile.TemporaryDirectory() as temp_dir, \

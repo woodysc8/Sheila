@@ -100,8 +100,21 @@ class CalendarTests(unittest.TestCase):
         start = datetime(2026, 8, 24, tzinfo=timezone.utc)
         calendar.get_events(start, start + timedelta(days=1))
         kwargs = service.events().list.call_args.kwargs
-        self.assertEqual(kwargs["timeMin"], start.isoformat())
-        self.assertEqual(kwargs["timeMax"], (start + timedelta(days=1)).isoformat())
+        zone = config.get_sheila_timezone()
+        self.assertEqual(kwargs["timeMin"], start.astimezone(zone).isoformat())
+        self.assertEqual(kwargs["timeMax"], (start + timedelta(days=1)).astimezone(zone).isoformat())
+
+    def test_utc_event_is_normalized_to_sheila_timezone_with_dst(self):
+        with patch.object(calendar.config, "SHEILA_TIMEZONE", "America/New_York"):
+            summer = calendar.normalize_event({"start": {"dateTime": "2026-07-01T13:00:00Z"}, "end": {"dateTime": "2026-07-01T14:00:00Z"}})
+            winter = calendar.normalize_event({"start": {"dateTime": "2026-01-01T14:00:00Z"}, "end": {"dateTime": "2026-01-01T15:00:00Z"}})
+        self.assertEqual(summer["start"], "2026-07-01T09:00:00-04:00")
+        self.assertEqual(winter["start"], "2026-01-01T09:00:00-05:00")
+
+    def test_all_day_event_keeps_date_only_value(self):
+        event = calendar.normalize_event({"start": {"date": "2026-08-24"}, "end": {"date": "2026-08-25"}})
+        self.assertEqual(event["start"], "2026-08-24")
+        self.assertEqual(event["end"], "2026-08-25")
 
 
 class DriveTests(unittest.TestCase):

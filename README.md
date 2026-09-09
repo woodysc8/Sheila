@@ -44,6 +44,11 @@ mkdir -p data
 python main.py
 ```
 
+Calendar display uses `America/New_York` by default. Set `SHEILA_TIMEZONE` to
+another IANA timezone when needed, for example `set SHEILA_TIMEZONE=America/Los_Angeles`.
+The morning Asana section is capped at five tasks by default; configure it with
+`MORNING_ASANA_LIMIT` without changing normal Asana task retrieval.
+
 Hold **SPACE**, talk, release. It'll transcribe what you said, send it to
 Gemini along with your personality prompt and any memory context, then speak
 the reply back and log the exchange.

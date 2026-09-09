@@ -36,7 +36,7 @@ class AsanaIntegrationTests(unittest.TestCase):
 
         with patch.object(asana.config, "ASANA_PAT", "token"), patch("integrations.asana.requests.get", side_effect=get) as request:
             tasks = asana.get_tasks()
-        self.assertEqual(tasks, [{"id": "task-1", "name": "File report", "completed": False, "due_on": "2026-08-24", "due_at": None,
+        self.assertEqual(tasks, [{"id": "task-1", "name": "File report", "completed": False, "due_on": "2026-08-24", "due_at": None, "priority": "",
                                   "assignee": "Sam", "project": "Operations", "workspace": "StreetCred", "permalink_url": "https://app.asana.com/0/1/2"}])
         self.assertTrue(any(call.args[0].endswith("/users/me") for call in request.call_args_list))
         self.assertTrue(any(call.args[0].endswith("/workspaces") for call in request.call_args_list))

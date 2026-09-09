@@ -34,6 +34,10 @@ class MorningBriefingTests(unittest.TestCase):
         self.assertIn("First meeting: 9:15 AM — Standup.", summary)
         self.assertNotIn("CALENDAR_ICS_URL", briefing.__dict__)
 
+    def test_calendar_display_converts_utc_event_to_eastern_time(self):
+        summary = self._brief(events=[{"title": "UTC meeting", "start": "2026-07-01T13:00:00Z", "end": "2026-07-01T14:00:00Z"}])
+        self.assertIn("9:00 AM–10:00 AM: UTC meeting", summary)
+
     def test_calendar_zero_and_failure_are_distinct(self):
         self.assertIn("- 0 event(s)", self._brief())
         with patch.object(briefing.calendar, "get_events", side_effect=GoogleAuthError("down")), \
@@ -53,21 +57,38 @@ class MorningBriefingTests(unittest.TestCase):
             {"name": "Done", "due_on": "2026-08-26", "completed": True},
             {"name": "Undated", "due_on": None, "due_at": None, "completed": False},
         ]
-        summary = self._brief(overdue=[{"name": "Late", "due_on": "2026-08-25", "completed": False, "project": "Client"}], tasks=tasks)
-        self.assertIn("Overdue tasks: 1", summary)
+        tasks.append({"name": "Late", "due_on": "2026-08-25", "completed": False, "project": "Client"})
+        summary = self._brief(tasks=tasks)
+        self.assertIn("Showing 3 relevant task(s)", summary)
         self.assertIn("Late (due 2026-08-25) — Client", summary)
-        self.assertIn("Tasks due today: 1", summary)
-        self.assertIn("Tasks due tomorrow: 1", summary)
         self.assertNotIn("Done", summary)
         self.assertNotIn("Undated", summary)
 
+    def test_asana_morning_selection_is_ranked_and_capped(self):
+        tasks = [
+            {"id": "old", "name": "Old overdue", "due_on": "2026-07-01", "completed": False},
+            {"id": "today", "name": "Due today", "due_on": "2026-08-26", "completed": False},
+            {"id": "tomorrow", "name": "Due tomorrow", "due_on": "2026-08-27", "completed": False},
+            {"id": "urgent", "name": "Urgent future", "due_on": "2026-09-10", "priority": "high", "completed": False},
+            {"id": "undated", "name": "No signal", "due_on": None, "completed": False},
+        ]
+        selected, additional = briefing.select_morning_tasks(tasks, date(2026, 8, 26), limit=3)
+        self.assertEqual([task["name"] for task in selected], ["Due today", "Due tomorrow", "Urgent future"])
+        self.assertEqual(additional, 1)
+
+    def test_asana_all_tasks_remain_available_to_normal_functionality(self):
+        tasks = [{"name": f"Task {i}", "due_on": "2026-08-26", "completed": False} for i in range(7)]
+        selected, additional = briefing.select_morning_tasks(tasks, date(2026, 8, 26), limit=5)
+        self.assertEqual(len(tasks), 7)
+        self.assertEqual(len(selected), 5)
+        self.assertEqual(additional, 2)
+
     def test_asana_zero_and_failure_are_distinct(self):
         summary = self._brief()
-        self.assertIn("No overdue tasks found.", summary)
-        self.assertIn("No tasks due today.", summary)
+        self.assertIn("No high-signal tasks found.", summary)
         with patch.object(briefing.calendar, "get_events", return_value=[]), \
              patch.object(briefing.gmail, "search_messages", return_value=[]), \
-             patch.object(briefing.asana, "get_overdue_tasks", side_effect=asana.AsanaError("down")), \
+               patch.object(briefing.asana, "get_tasks", side_effect=asana.AsanaError("down")), \
              patch.object(briefing, "get_weather_summary", return_value="Clear."), \
              patch.object(briefing.memory, "mark_notifications_delivered"):
             summary = briefing.build_morning_briefing(NOW)
@@ -92,6 +113,12 @@ class MorningBriefingTests(unittest.TestCase):
         self.assertIn("Dow Jones down 0.1%", summary)
         self.assertIn("because investors reacted to earnings", summary)
         self.assertNotIn("9.9%", summary)
+
+    def test_morning_brew_selection_omits_promotional_and_low_signal_lines(self):
+        message = {"body": "Fed held rates steady as inflation cooled.\nSubscribe now for a free mug.\nA celebrity bought a yacht.\nBank earnings beat expectations."}
+        self.assertEqual(briefing.select_morning_brew_items(message), [
+            "Fed held rates steady as inflation cooled.", "Bank earnings beat expectations."
+        ])
 
     def test_missing_weekend_and_market_holiday_brew_do_not_fabricate_market_data(self):
         self.assertIn("Today's edition was not found", self._brief())

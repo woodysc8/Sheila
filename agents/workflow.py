@@ -7,6 +7,7 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+import config
 from .router import route_request
 from integrations import asana, calendar, drive, gmail
 from integrations.google_auth import GoogleAuthError
@@ -102,8 +103,9 @@ def _drive_query(user_text: str) -> str:
 
 
 def _calendar_range(user_text: str, now: datetime | None = None) -> tuple[datetime, datetime]:
-    now = now or datetime.now().astimezone()
-    start = datetime.combine(now.date(), time.min, tzinfo=now.tzinfo)
+    timezone = config.get_sheila_timezone()
+    now = (now or datetime.now(timezone)).astimezone(timezone)
+    start = datetime.combine(now.date(), time.min, tzinfo=timezone)
     text = user_text.lower()
     if "today" in text and "tomorrow" in text:
         return start, start + timedelta(days=2)
@@ -146,7 +148,7 @@ def _is_due_today_task(task: dict[str, object], current_date: date) -> bool:
     due_at = task.get("due_at")
     if isinstance(due_at, str) and due_at:
         try:
-            return datetime.fromisoformat(due_at.replace("Z", "+00:00")).astimezone().date() == current_date
+            return datetime.fromisoformat(due_at.replace("Z", "+00:00")).astimezone(config.get_sheila_timezone()).date() == current_date
         except ValueError:
             return False
     return False
@@ -193,7 +195,7 @@ def google_data_node(state: SheilaWorkflowState) -> dict[str, str]:
                     "They do not confirm a company is a current client unless the retrieved text explicitly says client, account, or customer.")
             return {"google_context": "[DRIVE RESULTS]\n" + ("\n".join(lines) if lines else "No matching files found.") + relationship_note}
         if capability == "asana":
-            today = datetime.now().astimezone().date()
+            today = datetime.now(config.get_sheila_timezone()).date()
             if _is_due_task_request(user_text):
                 tasks = [task for task in asana.get_tasks(limit=20) if _is_due_today_task(task, today)]
                 description = "tasks due today"

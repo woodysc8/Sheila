@@ -70,6 +70,7 @@ def normalize_task(item: dict, workspace_name: str = "") -> dict[str, object]:
         "completed": bool(item.get("completed", False)),
         "due_on": item.get("due_on"),
         "due_at": item.get("due_at"),
+        "priority": item.get("priority") or item.get("priority_label") or "",
         "assignee": (item.get("assignee") or {}).get("name", ""),
         "project": ", ".join(project_names),
         "workspace": (item.get("workspace") or {}).get("name", workspace_name),

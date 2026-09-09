@@ -12,14 +12,13 @@ gates unprompted notifications (email alerts, etc).
 """
 
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 import requests
 import icalendar
 import recurring_ical_events
 import config
 import memory
 
-ET = ZoneInfo("America/New_York")
+ET = config.get_sheila_timezone()
 
 _calendar_cache = {"data": None, "fetched_at": None}
 _CACHE_TTL_SECONDS = 300  # re-fetch calendar at most every 5 minutes
