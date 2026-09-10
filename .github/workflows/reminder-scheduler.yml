@@ -1,0 +1,17 @@
+name: Sheila reminder scheduler
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  run-reminders:
+    runs-on: ubuntu-latest
+    steps:
+      # GitHub Actions provides the free scheduler because Render workers/cron are paid.
+      - name: Trigger Sheila reminder delivery
+        run: >
+          curl --fail --silent --show-error --request POST
+          --header "Authorization: Bearer ${{ secrets.SHEILA_REMINDER_WORKER_TOKEN }}"
+          https://sheila-dm1s.onrender.com/internal/reminders/run
