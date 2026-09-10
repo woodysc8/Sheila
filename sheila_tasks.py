@@ -12,6 +12,11 @@ import operational_store
 import personal_calendar
 
 STATUSES = {"pending", "completed", "cancelled"}
+_RELATIVE_REMINDER_PATTERN = re.compile(
+    r"^\s*remind me\s+in\s+(?:(?P<article>an?|the)\s+|(?P<amount>\d+)\s+)"
+    r"(?P<unit>seconds?|minutes?|hours?)\s+to\s+(?P<text>.+)$",
+    re.IGNORECASE,
+)
 
 
 def _zone() -> ZoneInfo:
@@ -79,12 +84,31 @@ def _time_from_text(text: str) -> time | None:
 
 
 def _parse_due(text: str, now: datetime) -> tuple[str | None, str | None]:
+    relative = _relative_due(text, now)
+    if relative is not None:
+        return relative.date().isoformat(), relative.isoformat()
     event_date = _date_from_text(text, now)
     if event_date is None:
         return None, None
     event_time = _time_from_text(text)
     due_at = datetime.combine(event_date, event_time, tzinfo=_zone()).isoformat() if event_time else None
     return event_date.isoformat(), due_at
+
+
+def _relative_due(text: str, now: datetime) -> datetime | None:
+    """Resolve ``in N minutes/hours`` without involving the model."""
+    match = _RELATIVE_REMINDER_PATTERN.match(text)
+    if not match:
+        return None
+    amount = 1 if match.group("article") else int(match.group("amount"))
+    unit = match.group("unit").lower()
+    if unit.startswith("second"):
+        delta = timedelta(seconds=amount)
+    elif unit.startswith("minute"):
+        delta = timedelta(minutes=amount)
+    else:
+        delta = timedelta(hours=amount)
+    return now + delta
 
 
 def _reminder_text(body: str) -> str:
@@ -112,6 +136,14 @@ def _next_monthly_due(day: int, current: datetime) -> datetime:
 
 def _operational_create(text: str, current: datetime) -> str | None:
     """Create a durable reminder or retain deterministic missing-time state."""
+    relative = _RELATIVE_REMINDER_PATTERN.match(text)
+    if relative:
+        due = _relative_due(text, current)
+        reminder_text = relative.group("text").strip(" ,.-")
+        if not reminder_text:
+            return "Please specify what I should remind you about."
+        operational_store.create_reminder(reminder_text, due, config.SHEILA_TIMEZONE, user_id=config.SHEILA_USER_ID)
+        return f"Reminder set: {reminder_text}."
     match = re.search(r"\bremind me\s+(?:to|about)\s+(.+)$", text, re.IGNORECASE)
     if not match:
         pending = operational_store.take_pending(config.SHEILA_USER_ID, current)

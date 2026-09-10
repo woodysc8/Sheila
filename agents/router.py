@@ -70,7 +70,7 @@ GMAIL_FOLLOWUP_PATTERN = re.compile(r"\bwhat did\s+[\w .'-]+\s+say\??$")
 DRIVE_RELATIONSHIP_PATTERN = re.compile(r"\b(?:which|what|who)\b.*\bclients?\b|\bcompanies\s+are\s+clients\b|\b(?:does|do)\b.*\bserve\b")
 ASANA_TASK_PATTERN = re.compile(r"\bwhat\s+(?:tasks?|do i)\b.*\bdue\s+today\b|\bwhat\s+do\s+i\s+have\s+due\s+today\b")
 REMINDER_REQUEST_PATTERN = re.compile(
-    r"\bremind me\s+(?:to|about)\b|\b(?:cancel|complete|finish|mark|move|change|update)\s+(?:my\s+)?(?:reminder|task)\b|"
+    r"\bremind me\s+(?:to|about|in\s+(?:(?:an?|\d+)\s+)?(?:seconds?|minutes?|hours?)\s+to)\b|\b(?:cancel|complete|finish|mark|move|change|update)\s+(?:my\s+)?(?:reminder|task)\b|"
     r"\b(?:what are my reminders|list my reminders|show my reminders|what do i need to get done)\b",
     re.IGNORECASE,
 )

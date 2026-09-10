@@ -10,6 +10,7 @@ import config
 import operational_store
 import reminder_worker
 import sheila_tasks
+from agents.router import route_request
 from migrate_operational_state import migrate
 
 
@@ -34,6 +35,26 @@ class OperationalReminderTests(unittest.TestCase):
         self.assertIn("What time", sheila_tasks.handle_request("Remind me to text Bo tmw", NOW))
         self.assertIn("Reminder set", sheila_tasks.handle_request("10:30 in the morning", NOW))
         self.assertIn("2026-09-11T10:30:00", operational_store.list_reminders()[0]["due_at"])
+
+    def test_relative_minutes_are_routed_and_persisted_deterministically(self):
+        text = "Remind me in 3 minutes to test the reminder system"
+        self.assertEqual(route_request(text).capability, "sheila_task")
+        response = sheila_tasks.handle_request(text, NOW)
+        self.assertIn("Reminder set", response)
+        reminder = operational_store.list_reminders()[0]
+        self.assertEqual(reminder["text"], "test the reminder system")
+        self.assertTrue(reminder["due_at"].startswith("2026-09-10T12:03:00"))
+
+    def test_relative_hours_are_persisted_with_exact_due_time(self):
+        response = sheila_tasks.handle_request("Remind me in 2 hours to call Mom", NOW)
+        self.assertIn("Reminder set: call Mom", response)
+        reminder = operational_store.list_reminders()[0]
+        self.assertEqual(reminder["text"], "call Mom")
+        self.assertTrue(reminder["due_at"].startswith("2026-09-10T14:00:00"))
+
+    def test_relative_an_hour_and_seconds_resolve_without_llm(self):
+        self.assertEqual(sheila_tasks._parse_due("Remind me in an hour to stretch", NOW)[1], "2026-09-10T13:00:00-04:00")
+        self.assertEqual(sheila_tasks._parse_due("Remind me in 30 seconds to test", NOW)[1], "2026-09-10T12:00:30-04:00")
 
     def test_configured_user_id_owns_pending_clarification(self):
         with patch.object(config, "SHEILA_USER_ID", "sam-production"):
