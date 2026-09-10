@@ -133,6 +133,7 @@ PyYAML==6.0.3
 recurring-ical-events==3.8.2
 referencing==0.37.0
 requests==2.34.2
+psycopg[binary]==3.2.10
 requests-oauthlib==2.0.0
 requests-toolbelt==1.0.0
 rich==15.0.0

@@ -134,6 +134,34 @@ completed, and cancelled states. Notification delivery is not wired into this
 command path yet; the existing scheduler remains responsible for quiet-hours
 and meeting-mode checks.
 
+## Durable operational state on Render
+
+Production calendar events and reminders use Render Postgres, configured with
+`SHEILA_OPERATIONAL_DATABASE_URL`. This is separate from Sheila/Sam 2 memory.
+Set that variable to Render's internal Postgres URL on both the web service and
+the reminder worker. Run the web service normally and run a separate Render
+background worker with `python reminder_worker.py`. The worker atomically
+claims due reminder deliveries, sends through the existing Zavu outbound path,
+and records success only after that call succeeds. Set
+`SHEILA_REMINDER_RECIPIENT`, `SHEILA_REMINDER_CHANNEL` (normally `whatsapp`),
+and optionally `SHEILA_REMINDER_SENDER_ID` for delivery.
+
+Before enabling the new store, inspect the old local operational records with:
+
+```bash
+python migrate_operational_state.py path/to/memory.db
+```
+
+Then explicitly apply only calendar events and pending timed `sheila_tasks`:
+
+```bash
+python migrate_operational_state.py path/to/memory.db --apply
+```
+
+This command never changes the SQLite source and never reads exchanges,
+structured memory, email, Chroma, or Sam 2 data. It records source row IDs in
+the operational database so reruns skip migrated rows.
+
 For local development, SQLite survives browser refreshes and process restarts
 because it is stored on disk. Render's default filesystem is ephemeral. Set
 `SHEILA_DB_PATH` to a file on an attached Render persistent disk for production

@@ -54,13 +54,14 @@ class SecondBrainClient:
         return self._request("POST", "/api/memories", json=payload)
 
     def recall(self, query: str = "", category: str = None, limit: int = 10,
-               source: str = None, sort: str = "relevance") -> list[dict]:
+               source: str = None, sort: str = "relevance", memory_key: str = None) -> list[dict]:
         """Search Sam 2 memories using its lexical memory endpoint."""
         payload = {
             "query": query,
             "category": category,
             "source": source,
             "sort": sort,
+            "memory_key": memory_key,
             "limit": limit,
         }
         result = self._request("POST", "/api/memories/search", json=payload)

@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
 import sheila_tasks
+import personal_calendar
 from agents.router import route_request
 from agents.workflow import handle_request
 
@@ -61,11 +62,31 @@ class SheilaTaskTests(unittest.TestCase):
         ]
         with patch("agents.workflow.calendar.get_events", return_value=work_events):
             result = handle_request("What do I have tomorrow?", brain)
-        self.assertIn("[WORK CALENDAR RESULTS]", result["response"])
+        self.assertNotIn("[WORK CALENDAR RESULTS]", result["response"])
         self.assertIn("Standup", result["response"])
         self.assertNotIn("Company holiday", result["response"])
-        self.assertIn("[PERSONAL CALENDAR RESULTS]", result["response"])
+        self.assertNotIn("[PERSONAL CALENDAR RESULTS]", result["response"])
+        self.assertNotIn("2026-09-10T09:00:00", result["response"])
         brain.assert_not_called()
+
+    def test_calendar_lookup_uses_conversational_times(self):
+        brain = Mock()
+        work_events = [{"title": "All Hands Call", "start": "2026-09-11T11:30:00-04:00", "end": "2026-09-11T12:00:00-04:00", "location": ""}]
+        with patch("agents.workflow.calendar.get_events", return_value=work_events):
+            result = handle_request("What are my work meetings Friday?", brain)
+        self.assertEqual(result["response"], "You have All Hands Call at 11:30 AM.")
+        self.assertNotIn("America/New_York", result["response"])
+
+    def test_personal_and_work_lookup_is_conversational(self):
+        personal_calendar.handle_personal_calendar_request("Nora is coming Friday at 7.", NOW)
+        brain = Mock()
+        work_events = [{"title": "All Hands Call", "start": "2026-09-11T11:30:00-04:00", "end": "2026-09-11T12:00:00-04:00", "location": ""}]
+        with patch("agents.workflow.calendar.get_events", return_value=work_events):
+            result = handle_request("What do I have Friday?", brain)
+        self.assertIn("Friday you have All Hands Call at 11:30 AM and Nora is coming at 7 PM.", result["response"])
+        self.assertNotIn("[PERSONAL CALENDAR RESULTS]", result["response"])
+        self.assertNotIn("[WORK CALENDAR RESULTS]", result["response"])
+        self.assertNotIn("2026-09-11T", result["response"])
 
 
 if __name__ == "__main__":

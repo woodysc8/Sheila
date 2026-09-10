@@ -1,12 +1,15 @@
 """Sheila-owned persistent reminders and task commands."""
 
 from datetime import date, datetime, time, timedelta
+from calendar import monthrange
 import os
 import re
 import sqlite3
 from zoneinfo import ZoneInfo
 
 import config
+import operational_store
+import personal_calendar
 
 STATUSES = {"pending", "completed", "cancelled"}
 
@@ -41,6 +44,11 @@ def _row(row: sqlite3.Row) -> dict[str, object]:
 
 def _date_from_text(text: str, now: datetime) -> date | None:
     lowered = text.lower()
+    lowered = re.sub(r"\btmw\b", "tomorrow", lowered)
+    text = re.sub(r"\btmw\b", "tomorrow", text, flags=re.IGNORECASE)
+    resolved = personal_calendar.resolve_calendar_date(text, now)
+    if resolved is not None:
+        return resolved
     if "today" in lowered:
         return now.date()
     if "tomorrow" in lowered:
@@ -53,12 +61,14 @@ def _date_from_text(text: str, now: datetime) -> date | None:
 
 
 def _time_from_text(text: str) -> time | None:
-    match = re.search(r"\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", text, re.IGNORECASE)
+    match = re.search(r"\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm|in\s+the\s+morning)?\b", text, re.IGNORECASE)
     if not match:
         return time(9, 0) if re.search(r"\bmorning\b", text, re.IGNORECASE) else None
     hour = int(match.group(1))
     minute = int(match.group(2) or 0)
     meridiem = (match.group(3) or "pm").lower()
+    if "morning" in meridiem:
+        meridiem = "am"
     if meridiem == "pm" and hour < 12:
         hour += 12
     if meridiem == "am" and hour == 12:
@@ -75,6 +85,63 @@ def _parse_due(text: str, now: datetime) -> tuple[str | None, str | None]:
     event_time = _time_from_text(text)
     due_at = datetime.combine(event_date, event_time, tzinfo=_zone()).isoformat() if event_time else None
     return event_date.isoformat(), due_at
+
+
+def _reminder_text(body: str) -> str:
+    """Remove only scheduling clauses, preserving the requested action."""
+    value = re.sub(r"\bon\s+the\s+\d{1,2}(?:st|nd|rd|th)?(?:\s+and\s+\d{1,2}(?:st|nd|rd|th)?)?\s+every\s+month\b", "", body, flags=re.IGNORECASE)
+    value = re.sub(r"\b(?:today|tomorrow|tmw)\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\b(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\b(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\b(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm|in\s+the\s+morning)\b", "", value, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", value).strip(" ,.-")
+
+
+def _next_monthly_due(day: int, current: datetime) -> datetime:
+    """Keep day 29/30/31 intact; skip months that cannot contain it."""
+    year, month = current.year, current.month
+    while True:
+        if day <= monthrange(year, month)[1]:
+            candidate = current.replace(year=year, month=month, day=day, hour=9, minute=0, second=0, microsecond=0)
+            if candidate >= current:
+                return candidate
+        month += 1
+        if month == 13:
+            year, month = year + 1, 1
+
+
+def _operational_create(text: str, current: datetime) -> str | None:
+    """Create a durable reminder or retain deterministic missing-time state."""
+    match = re.search(r"\bremind me\s+(?:to|about)\s+(.+)$", text, re.IGNORECASE)
+    if not match:
+        pending = operational_store.take_pending(config.SHEILA_USER_ID, current)
+        if not pending:
+            return None
+        reminder_time = _time_from_text(text)
+        if reminder_time is None:
+            operational_store.save_pending(config.SHEILA_USER_ID, pending["text"], pending["due_date"], pending["timezone"], current + timedelta(hours=24))
+            return "Please specify a reminder time."
+        due = datetime.combine(date.fromisoformat(pending["due_date"]), reminder_time, tzinfo=_zone())
+        operational_store.create_reminder(pending["text"], due, pending["timezone"], user_id=config.SHEILA_USER_ID)
+        return f"Reminder set: {pending['text']}."
+    body = match.group(1)
+    reminder_text = _reminder_text(body)
+    monthly = re.search(r"\bon\s+the\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s+and\s+(\d{1,2})(?:st|nd|rd|th)?)?\s+every\s+month\b", body, re.IGNORECASE)
+    if monthly:
+        created = []
+        for raw_day in monthly.groups():
+            if raw_day:
+                day = int(raw_day); due = _next_monthly_due(day, current)
+                operational_store.create_reminder(reminder_text or "Monthly reminder", due, config.SHEILA_TIMEZONE, {"type":"monthly_day","day":day}, config.SHEILA_USER_ID); created.append(str(day))
+        return "Reminder set: monthly on " + " and ".join(created) + "."
+    due_date, due_at = _parse_due(body, current)
+    if due_date is None:
+        return "Please specify when I should remind you."
+    if due_at is None:
+        operational_store.save_pending(config.SHEILA_USER_ID, reminder_text, due_date, config.SHEILA_TIMEZONE, current + timedelta(hours=24))
+        return "What time should I remind you?"
+    operational_store.create_reminder(reminder_text, datetime.fromisoformat(due_at), config.SHEILA_TIMEZONE, user_id=config.SHEILA_USER_ID)
+    return f"Reminder set: {reminder_text}."
 
 
 def create(text: str, due_date: str | None, due_at: str | None) -> dict[str, object]:
@@ -141,6 +208,35 @@ def handle_request(user_text: str, now: datetime | None = None) -> str:
     current = (now or datetime.now(_zone())).astimezone(_zone())
     text = user_text.strip().rstrip("?.!")
     lowered = text.lower()
+    operational_store.require_configured()
+    if re.search(r"\b(?:maybe|might|may|should i|thinking about|if)\b", lowered):
+        return "I didn't create a reminder because that sounded tentative."
+    if operational_store.configured():
+        active = operational_store.list_reminders(config.SHEILA_USER_ID)
+        cancel_match = re.search(r"cancel\s+(?:my\s+)?(?:reminder|task)\s+(?:to\s+)?(.+)$", text, re.IGNORECASE)
+        complete_match = re.search(r"(?:mark|set)\s+(?:my\s+)?(?:reminder|task)\s+(.+?)\s+(?:done|complete|completed)$", text, re.IGNORECASE)
+        update_match = re.search(r"(?:move|change|update)\s+(?:my\s+)?(?:reminder|task)\s+(?:to\s+)?(.+?)\s+to\s+(.+)$", text, re.IGNORECASE)
+        if cancel_match or complete_match or update_match:
+            match = cancel_match or complete_match or update_match; needle = match.group(1).strip().lower()
+            matches = [item for item in active if needle in str(item["text"]).lower()]
+            if len(matches) != 1:
+                return "I need the exact reminder to update." if not matches else "I found more than one matching reminder."
+            item = matches[0]
+            if cancel_match:
+                operational_store.set_reminder_status(item["id"], "cancelled"); return f"Cancelled reminder: {item['text']}."
+            if complete_match:
+                operational_store.set_reminder_status(item["id"], "completed"); return f"Completed reminder: {item['text']}."
+            due_date, due_at = _parse_due(update_match.group(2), current)
+            if due_date is None: return "Please specify the new reminder date."
+            operational_store.update_reminder(item["id"], due_at=datetime.fromisoformat(due_at) if due_at else datetime.combine(date.fromisoformat(due_date), time(9), tzinfo=_zone()))
+            return f"Updated reminder: {item['text']}."
+        result = _operational_create(text, current)
+        if result is not None:
+            return result
+        if re.search(r"\b(?:what are my reminders|list my reminders|show my reminders)\b", lowered):
+            items = operational_store.list_reminders()
+            return "No pending reminders." if not items else "Reminders:\n" + "\n".join(f"- {item['text']} ({item['due_at']})" for item in items)
+        return "I couldn't identify a reminder request."
     if re.search(r"\b(?:maybe|might|may|should i|thinking about|if)\b", lowered):
         return "I didn't create a reminder because that sounded tentative."
     cancel_match = re.search(r"cancel\s+(?:my\s+)?(?:reminder|task)\s+(?:to\s+)?(.+)$", text, re.IGNORECASE)

@@ -7,6 +7,7 @@ import sqlite3
 from zoneinfo import ZoneInfo
 
 import config
+import operational_store
 
 
 class CalendarError(ValueError):
@@ -76,6 +77,10 @@ def _event(row: sqlite3.Row) -> dict[str, object]:
     }
 
 
+def _operational_event(row: dict[str, object]) -> dict[str, object]:
+    return {"id": row["id"], "title": row["title"], "description": row["description"], "start": row["start_at"], "end": row["end_at"], "timezone": row["timezone"], "location": row["location"], "created_at": row["created_at"], "updated_at": row["updated_at"]}
+
+
 def create_event(title: str, start: str | datetime, end: str | datetime,
                  description: str = "", timezone: str | None = None, location: str = "") -> dict[str, object]:
     if not isinstance(title, str) or not title.strip():
@@ -89,6 +94,9 @@ def create_event(title: str, start: str | datetime, end: str | datetime,
     start_at, end_at = start_at.astimezone(zone), end_at.astimezone(zone)
     if end_at <= start_at:
         raise CalendarError("Event end must be after its start.")
+    operational_store.require_configured()
+    if operational_store.configured():
+        return _operational_event(operational_store.create_calendar_event(title.strip(), start_at, end_at, description, timezone_name, location))
     now = datetime.now(zone).isoformat()
     conn = _connect()
     cursor = conn.execute(
@@ -105,6 +113,10 @@ def create_event(title: str, start: str | datetime, end: str | datetime,
 
 
 def get_event(event_id: int) -> dict[str, object] | None:
+    operational_store.require_configured()
+    if operational_store.configured():
+        row = operational_store.get_calendar_event(event_id)
+        return _operational_event(row) if row else None
     conn = _connect()
     row = conn.execute("SELECT * FROM calendar_events WHERE id = ?", (event_id,)).fetchone()
     conn.close()
@@ -117,6 +129,9 @@ def list_events(start: str | datetime, end: str | datetime, timezone: str | None
     end_at = end if isinstance(end, datetime) else parse_datetime(end, timezone_name)
     if end_at <= start_at:
         raise CalendarError("Range end must be after its start.")
+    operational_store.require_configured()
+    if operational_store.configured():
+        return [_operational_event(row) for row in operational_store.list_calendar_events(start_at, end_at)]
     conn = _connect()
     rows = conn.execute(
         "SELECT * FROM calendar_events WHERE julianday(start_at) < julianday(?) AND julianday(end_at) > julianday(?) ORDER BY julianday(start_at), id",
@@ -127,6 +142,7 @@ def list_events(start: str | datetime, end: str | datetime, timezone: str | None
 
 
 def update_event(event_id: int, **changes: object) -> dict[str, object] | None:
+    operational_store.require_configured()
     existing = get_event(event_id)
     if existing is None:
         _log("update_missing", event_id=event_id)
@@ -146,6 +162,9 @@ def update_event(event_id: int, **changes: object) -> dict[str, object] | None:
     end = parse_datetime(str(changes.get("end", existing["end"])), timezone_name)
     if end <= start:
         raise CalendarError("Event end must be after its start.")
+    if operational_store.configured():
+        row = operational_store.update_calendar_event(event_id, {"title": title, "description": description, "location": location, "timezone": timezone_name, "start_at": start.isoformat(), "end_at": end.isoformat()})
+        return _operational_event(row) if row else None
     _log(
         "update_requested",
         event_id=event_id,
@@ -176,6 +195,9 @@ def update_event(event_id: int, **changes: object) -> dict[str, object] | None:
 
 
 def delete_event(event_id: int) -> bool:
+    operational_store.require_configured()
+    if operational_store.configured():
+        return operational_store.delete_calendar_event(event_id)
     conn = _connect()
     cursor = conn.execute("DELETE FROM calendar_events WHERE id = ?", (event_id,))
     conn.commit()

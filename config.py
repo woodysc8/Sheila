@@ -165,6 +165,18 @@ GOOGLE_OAUTH_CREDENTIALS_FILE = os.environ.get(
 # MEMORY
 # ---------------------------------------------------------------------------
 DB_PATH = os.environ.get("SHEILA_DB_PATH", os.path.join(os.path.dirname(__file__), "data", "memory.db"))
+# Operational state (calendar events and reminders) is deliberately separate
+# from conversational memory. Production requires a Render Postgres URL.
+SHEILA_OPERATIONAL_DATABASE_URL = os.environ.get("SHEILA_OPERATIONAL_DATABASE_URL", "").strip()
+# Kept separate from SECOND_BRAIN_USER_ID: this identifies the owner of
+# Sheila's calendar/reminder operational records, not memory records.
+SHEILA_USER_ID = os.environ.get("SHEILA_USER_ID", "sam").strip() or "sam"
+SHEILA_REQUIRE_OPERATIONAL_DATABASE = os.environ.get(
+    "SHEILA_REQUIRE_OPERATIONAL_DATABASE", "true" if os.environ.get("RENDER") else "false"
+).strip().lower() in {"1", "true", "yes"}
+SHEILA_REMINDER_RECIPIENT = os.environ.get("SHEILA_REMINDER_RECIPIENT", "").strip()
+SHEILA_REMINDER_CHANNEL = os.environ.get("SHEILA_REMINDER_CHANNEL", "whatsapp").strip().lower()
+SHEILA_REMINDER_SENDER_ID = os.environ.get("SHEILA_REMINDER_SENDER_ID", "").strip() or None
 MEMORY_CONTEXT_TURNS = 6
 SHEILA_MEMORY_BACKEND = os.environ.get("SHEILA_MEMORY_BACKEND", "local").strip().lower()
 SHEILA_MEMORY_FALLBACK = os.environ.get("SHEILA_MEMORY_FALLBACK", "true").strip().lower() not in {"0", "false", "no"}

@@ -5,6 +5,8 @@ This module deliberately has no provider fallback: Sheila either uses OpenAI
 or returns a clear configuration/request error.
 """
 
+import json
+
 import requests
 
 import config
@@ -15,6 +17,10 @@ import knowledge
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 OPENAI_NOT_CONFIGURED = "OpenAI is not configured. Add the OpenAI API key to the environment before using Sheila."
 OPENAI_REQUEST_FAILED = "OpenAI couldn't respond right now. Check the API configuration and connection, then try again."
+
+
+class OpenAIStructuredOutputError(RuntimeError):
+    """Raised when a structured Responses API request has no usable object."""
 
 
 class Brain:
@@ -107,6 +113,50 @@ def _ask_openai(prompt: str) -> str:
         return OPENAI_REQUEST_FAILED
 
 
+def _ask_openai_structured(prompt: str, schema: dict, schema_name: str,
+                           max_output_tokens: int = 4000) -> dict:
+    """Request one strict JSON-schema object without changing normal text calls."""
+    key = _configured_api_key()
+    if not key:
+        raise OpenAIStructuredOutputError(OPENAI_NOT_CONFIGURED)
+    try:
+        response = requests.post(
+            OPENAI_RESPONSES_URL,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={
+                "model": config.OPENAI_MODEL,
+                "instructions": config.SYSTEM_PROMPT,
+                "input": prompt,
+                "max_output_tokens": max_output_tokens,
+                "text": {"format": {
+                    "type": "json_schema", "name": schema_name,
+                    "strict": True, "schema": schema,
+                }},
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as exc:
+        raise OpenAIStructuredOutputError(str(exc)) from exc
+    except (TypeError, ValueError, KeyError) as exc:
+        raise OpenAIStructuredOutputError("OpenAI response could not be read") from exc
+
+    if payload.get("status") in {"failed", "incomplete", "cancelled"}:
+        details = payload.get("error") or payload.get("incomplete_details") or {}
+        raise OpenAIStructuredOutputError(str(details))
+    text = _response_text(payload)
+    if not text:
+        raise OpenAIStructuredOutputError("OpenAI returned an empty or refusal response")
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise OpenAIStructuredOutputError("OpenAI structured output was not valid JSON") from exc
+    if not isinstance(value, dict):
+        raise OpenAIStructuredOutputError("OpenAI structured output was not an object")
+    return value
+
+
 def summarize_message(sender_name: str, context_label: str, body: str) -> str:
     """Summarize a user-requested message with the same OpenAI-only provider."""
     prompt = f"""Summarize this message in 2-3 short spoken sentences, as if
@@ -136,6 +186,7 @@ def think(user_text: str, context: str = "") -> str:
 - Treat [DOCUMENT KNOWLEDGE] as retrieved evidence and preserve its visible source labels. An unrelated fact in one source does not establish a different fact: working remotely from Maryland does not establish attending the University of Maryland. An explicit document statement that Sam attended a named college is evidence for that college.
 - Do not describe old Gmail results as current or recent. Preserve retrieved dates exactly when available.
 - If evidence is insufficient, say so plainly. Do not infer missing relationships, dates, or events.
+- Never claim that a calendar event, reminder, task, or other mutation occurred unless this request includes an explicit successful operation result.
 
 Context from memory:
 {memory_context}
