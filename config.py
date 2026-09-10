@@ -166,6 +166,15 @@ GOOGLE_OAUTH_CREDENTIALS_FILE = os.environ.get(
 # ---------------------------------------------------------------------------
 DB_PATH = os.environ.get("SHEILA_DB_PATH", os.path.join(os.path.dirname(__file__), "data", "memory.db"))
 MEMORY_CONTEXT_TURNS = 6
+SHEILA_MEMORY_BACKEND = os.environ.get("SHEILA_MEMORY_BACKEND", "local").strip().lower()
+SHEILA_MEMORY_FALLBACK = os.environ.get("SHEILA_MEMORY_FALLBACK", "true").strip().lower() not in {"0", "false", "no"}
+SECOND_BRAIN_URL = os.environ.get("SECOND_BRAIN_URL", "").strip().rstrip("/")
+SECOND_BRAIN_SERVICE_TOKEN = os.environ.get("SECOND_BRAIN_SERVICE_TOKEN", "").strip()
+SECOND_BRAIN_USER_ID = os.environ.get("SECOND_BRAIN_USER_ID", "").strip()
+try:
+    SECOND_BRAIN_TIMEOUT = float(os.environ.get("SECOND_BRAIN_TIMEOUT", "10"))
+except ValueError:
+    SECOND_BRAIN_TIMEOUT = 10.0
 
 # ---------------------------------------------------------------------------
 # AUDIO

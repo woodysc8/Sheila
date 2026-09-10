@@ -10,8 +10,13 @@ that isn't in the recent window).
 import sqlite3
 import os
 import json
+import logging
 from datetime import datetime
 import config
+import second_brain
+
+
+logger = logging.getLogger(__name__)
 
 
 def init_db():
@@ -83,7 +88,7 @@ def _query_category(query: str) -> str | None:
     return None
 
 
-def remember(category: str, content: str, source: str, source_id: str = None,
+def _local_remember(category: str, content: str, source: str, source_id: str = None,
              importance: int = 0, metadata: dict = None) -> dict:
     """Persist one structured fact while keeping conversation exchanges separate."""
     init_db()
@@ -122,7 +127,7 @@ def remember(category: str, content: str, source: str, source_id: str = None,
     return _memory_row(row)
 
 
-def recall(query: str = "", category: str = None, limit: int = 10) -> list[dict]:
+def _local_recall(query: str = "", category: str = None, limit: int = 10) -> list[dict]:
     """Return bounded structured memories using simple reliable text matching."""
     init_db()
     conn = _connect()
@@ -144,7 +149,7 @@ def recall(query: str = "", category: str = None, limit: int = 10) -> list[dict]
     return [_memory_row(row) for row in rows]
 
 
-def update(memory_id: int, **changes) -> dict:
+def _local_update(memory_id: int, **changes) -> dict:
     """Update a structured memory and preserve its original creation time."""
     allowed = {"category", "content", "source", "source_id", "importance", "metadata"}
     values = {key: value for key, value in changes.items() if key in allowed}
@@ -169,7 +174,7 @@ def update(memory_id: int, **changes) -> dict:
     return _memory_row(row)
 
 
-def forget(memory_id: int) -> bool:
+def _local_forget(memory_id: int) -> bool:
     """Delete one structured memory by id."""
     init_db()
     conn = _connect()
@@ -179,7 +184,7 @@ def forget(memory_id: int) -> bool:
     return cursor.rowcount > 0
 
 
-def forget_latest_structured(source: str = None) -> bool:
+def _local_forget_latest_structured(source: str = None) -> bool:
     """Remove the most recently updated durable memory, optionally by source."""
     init_db()
     conn = _connect()
@@ -201,13 +206,95 @@ def forget_latest_structured(source: str = None) -> bool:
     return cursor.rowcount > 0
 
 
-def get_structured_context(query: str = "", limit: int = 8) -> str:
-    items = recall(query=query, limit=limit)
+def _local_get_structured_context(query: str = "", limit: int = 8) -> str:
+    items = _local_recall(query=query, limit=limit)
     if not items:
         return "No structured memories yet."
     lines = ["Structured memories:"]
     for item in items:
         provenance = item["source"] + (f"/{item['source_id']}" if item["source_id"] else "")
+        lines.append(f"- [{item['category']}; from {provenance}] {item['content']}")
+    return "\n".join(lines)
+
+
+def _remote_or_local(operation, local_operation):
+    """Use Sam 2 when selected, retaining local memory as a migration fallback."""
+    if config.SHEILA_MEMORY_BACKEND != "second_brain":
+        return local_operation()
+    try:
+        return operation(second_brain.SecondBrainClient())
+    except second_brain.SecondBrainError as exc:
+        if not config.SHEILA_MEMORY_FALLBACK:
+            raise
+        logger.warning(
+            "Sam 2 memory request failed; using local memory fallback: %s",
+            exc,
+        )
+        return local_operation()
+
+
+def remember(category: str, content: str, source: str, source_id: str = None,
+             importance: int = 0, metadata: dict = None) -> dict:
+    """Persist durable memory through the selected provider."""
+    return _remote_or_local(
+        lambda client: client.remember(category, content, source, source_id, importance, metadata),
+        lambda: _local_remember(category, content, source, source_id, importance, metadata),
+    )
+
+
+def recall(query: str = "", category: str = None, limit: int = 10) -> list[dict]:
+    """Recall durable memories through the selected provider."""
+    return _remote_or_local(
+        lambda client: client.recall(query, category, limit),
+        lambda: _local_recall(query, category, limit),
+    )
+
+
+def update(memory_id: str, **changes) -> dict:
+    """Update durable memory through the selected provider."""
+    return _remote_or_local(
+        lambda client: client.update(memory_id, **changes),
+        lambda: _local_update(memory_id, **changes),
+    )
+
+
+def forget(memory_id: str) -> bool:
+    """Forget durable memory through the selected provider."""
+    return _remote_or_local(
+        lambda client: client.forget(memory_id),
+        lambda: _local_forget(memory_id),
+    )
+
+
+def forget_latest_structured(source: str = None) -> bool:
+    """Forget the latest durable memory while preserving local compatibility."""
+    if config.SHEILA_MEMORY_BACKEND != "second_brain":
+        return _local_forget_latest_structured(source)
+    try:
+        items = second_brain.SecondBrainClient().recall(
+            limit=1,
+            source=source,
+            sort="updated_at",
+        )
+        return bool(items and forget(items[0]["id"]))
+    except second_brain.SecondBrainError as exc:
+        if not config.SHEILA_MEMORY_FALLBACK:
+            raise
+        logger.warning(
+            "Sam 2 latest-memory request failed; using local memory fallback: %s",
+            exc,
+        )
+        return _local_forget_latest_structured(source)
+
+
+def get_structured_context(query: str = "", limit: int = 8) -> str:
+    """Format durable memories from the selected provider for the brain."""
+    items = recall(query=query, limit=limit)
+    if not items:
+        return "No structured memories yet."
+    lines = ["Structured memories:"]
+    for item in items:
+        provenance = item["source"] + (f"/{item['source_id']}" if item.get("source_id") else "")
         lines.append(f"- [{item['category']}; from {provenance}] {item['content']}")
     return "\n".join(lines)
 
