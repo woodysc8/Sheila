@@ -15,25 +15,35 @@ def deliver(reminder: dict) -> dict:
                           f"Reminder: {reminder['text']}", config.SHEILA_REMINDER_SENDER_ID)
 
 
-def dispatch_once(now: datetime | None = None, sender=deliver) -> bool:
+def dispatch_due(now: datetime | None = None, sender=deliver, limit: int = 100) -> dict[str, int]:
+    """Process due occurrences using the store's atomic claim as the lock."""
     current = (now or datetime.now(config.get_sheila_timezone())).astimezone(config.get_sheila_timezone())
-    item = operational_store.claim_due(current)
-    if not item:
-        return False
-    try:
-        sender(item)
-    except Exception as exc:
-        operational_store.complete_delivery(item, current, exc)
-        return False
-    operational_store.complete_delivery(item, current)
-    return True
+    result = {"processed": 0, "sent": 0, "failed": 0}
+    while result["processed"] < limit:
+        item = operational_store.claim_due(current)
+        if not item:
+            break
+        result["processed"] += 1
+        try:
+            sender(item)
+        except Exception as exc:
+            operational_store.complete_delivery(item, current, exc)
+            result["failed"] += 1
+        else:
+            operational_store.complete_delivery(item, current)
+            result["sent"] += 1
+    return result
+
+
+def dispatch_once(now: datetime | None = None, sender=deliver) -> bool:
+    """Compatibility wrapper for callers/tests that process at most one item."""
+    return dispatch_due(now, sender, limit=1)["sent"] == 1
 
 
 def main() -> None:
     operational_store.initialize()
     while True:
-        while dispatch_once():
-            pass
+        dispatch_due()
         time.sleep(30)
 
 

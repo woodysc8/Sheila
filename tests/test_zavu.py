@@ -187,7 +187,7 @@ class ZavuIntegrationTests(unittest.TestCase):
                 "Sheila process_message started",
                 "Sheila process_message completed successfully",
                 "Zavu outbound send started",
-                "Inbound sender diagnostic channel=whatsapp; sender_type=str; sender_repr='+14155551234'; sender_id_type=str; sender_is_digits=False",
+                "Inbound sender diagnostic channel=whatsapp; sender_type=str; sender_repr='+14155551234'; sender_id='sender_test'; sender_id_type=str; sender_is_digits=False",
                 "Zavu outbound send completed successfully",
             ],
         )

@@ -4,6 +4,7 @@ Run separately from the terminal client: ``python zavu_webhook.py``.
 """
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import hmac
 import json
 import sqlite3
 import threading
@@ -14,6 +15,7 @@ import calendar_store
 from integrations import zavu
 import config
 import memory
+import reminder_worker
 from sheila_handler import process_message
 
 
@@ -22,6 +24,7 @@ PORT = 3002
 WEBHOOK_PATH = "/webhooks/zavu"
 CALENDAR_PATH = "/calendar"
 CALENDAR_API_PATH = "/api/calendar/events"
+REMINDER_WORKER_PATH = "/internal/reminders/run"
 _processed_events: set[str] = set()
 _processed_lock = threading.Lock()
 
@@ -125,6 +128,15 @@ class ZavuWebhookHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError) as exc:
             self._json(400, {"error": str(exc)})
 
+    def _run_reminder_worker(self) -> None:
+        token = config.SHEILA_REMINDER_WORKER_TOKEN
+        authorization = self.headers.get("Authorization", "")
+        expected = f"Bearer {token}"
+        if not token or not hmac.compare_digest(authorization, expected):
+            self._json(401, {"error": "Unauthorized"})
+            return
+        self._json(200, reminder_worker.dispatch_due())
+
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         parsed = urlparse(self.path)
         if parsed.path == CALENDAR_PATH:
@@ -141,7 +153,11 @@ class ZavuWebhookHandler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        if urlparse(self.path).path == CALENDAR_API_PATH:
+        path = urlparse(self.path).path
+        if path == REMINDER_WORKER_PATH:
+            self._run_reminder_worker()
+            return
+        if path == CALENDAR_API_PATH:
             self._calendar_api("POST", CALENDAR_API_PATH)
             return
         if urlparse(self.path).path != WEBHOOK_PATH:

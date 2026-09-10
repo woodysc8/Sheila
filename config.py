@@ -175,8 +175,9 @@ SHEILA_REQUIRE_OPERATIONAL_DATABASE = os.environ.get(
     "SHEILA_REQUIRE_OPERATIONAL_DATABASE", "true" if os.environ.get("RENDER") else "false"
 ).strip().lower() in {"1", "true", "yes"}
 SHEILA_REMINDER_RECIPIENT = os.environ.get("SHEILA_REMINDER_RECIPIENT", "").strip()
-SHEILA_REMINDER_CHANNEL = os.environ.get("SHEILA_REMINDER_CHANNEL", "whatsapp").strip().lower()
+SHEILA_REMINDER_CHANNEL = os.environ.get("SHEILA_REMINDER_CHANNEL", "telegram").strip().lower()
 SHEILA_REMINDER_SENDER_ID = os.environ.get("SHEILA_REMINDER_SENDER_ID", "").strip() or None
+SHEILA_REMINDER_WORKER_TOKEN = os.environ.get("SHEILA_REMINDER_WORKER_TOKEN", "").strip()
 MEMORY_CONTEXT_TURNS = 6
 SHEILA_MEMORY_BACKEND = os.environ.get("SHEILA_MEMORY_BACKEND", "local").strip().lower()
 SHEILA_MEMORY_FALLBACK = os.environ.get("SHEILA_MEMORY_FALLBACK", "true").strip().lower() not in {"0", "false", "no"}
