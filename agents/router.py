@@ -52,6 +52,13 @@ PERSONAL_CALENDAR_PLAN_PATTERN = re.compile(
     r".*\b(?:today|tonight|tomorrow|next|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b)",
     re.IGNORECASE,
 )
+PERSONAL_CALENDAR_DATED_COMMITMENT_PATTERN = re.compile(
+    r"(?=[\s\S]*\b(?:i(?:'m| am)\s+going|taking\s+pto|[a-z][a-z'-]*\s+is\s+coming|"
+    r"appointment|company\s+retreat|alumni\s+weekend|\w+\s+game)\b)"
+    r"(?=[\s\S]*\b(?:today|tomorrow|this|next|monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"january|february|march|april|may|june|july|august|september|october|november|december)\b)",
+    re.IGNORECASE,
+)
 PERSONAL_PLAN_EXCLUSION_PATTERN = re.compile(
     r"\b(?:might|may|maybe|thinking about|wish|should i|if|went|came|last|yesterday)\b",
     re.IGNORECASE,
@@ -94,7 +101,8 @@ def route_request(user_text: str) -> RoutingDecision:
     if (_matches(normalized, PERSONAL_CALENDAR_TERMS) or
             (PERSONAL_CALENDAR_LOOKUP_PATTERN.search(normalized) and not is_generic_calendar_request) or
             (not is_tentative_or_historical and not is_generic_calendar_request and
-             PERSONAL_CALENDAR_PLAN_PATTERN.search(normalized)) or
+             (PERSONAL_CALENDAR_PLAN_PATTERN.search(normalized) or
+              PERSONAL_CALENDAR_DATED_COMMITMENT_PATTERN.search(normalized)) and "?" not in user_text) or
             (not is_tentative_or_historical and PERSONAL_CALENDAR_COMMAND_PATTERN.search(normalized) and
              not is_non_calendar_mutation and not is_generic_calendar_request)):
         return RoutingDecision("Sheila", "personal_calendar", False, "This request needs Sheila's personal calendar.", "personal_calendar")

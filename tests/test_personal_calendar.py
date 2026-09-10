@@ -179,6 +179,27 @@ class PersonalCalendarInterfaceTests(unittest.TestCase):
         self.assertEqual([(event["id"], event["start"], event["end"]) for event in listed],
                          [(created["id"], persisted["start"], persisted["end"])])
 
+    def test_natural_update_matches_normalized_subject_and_rejects_ambiguity(self):
+        personal_calendar.handle_personal_calendar_request("Nora is coming Friday at 7.", NOW)
+        response = personal_calendar.handle_personal_calendar_request("Nora is actually coming at 8.", NOW)
+        self.assertIn("8:00 PM", response)
+        event = calendar_store.list_events("2026-09-11T00:00:00", "2026-09-12T00:00:00", "America/New_York")[0]
+        self.assertIn("T20:00:00-04:00", event["start"])
+
+        personal_calendar.handle_personal_calendar_request("Nora is coming Saturday at 7.", NOW)
+        response = personal_calendar.handle_personal_calendar_request("Nora is actually coming at 9.", NOW)
+        self.assertIn("Which matching", response)
+        events = calendar_store.list_events("2026-09-11T00:00:00", "2026-09-14T00:00:00", "America/New_York")
+        self.assertIn("T20:00:00-04:00", events[0]["start"])
+        self.assertIn("T19:00:00-04:00", events[1]["start"])
+
+    def test_tentative_and_historical_followup_do_not_mutate(self):
+        personal_calendar.handle_personal_calendar_request("Nora is coming Friday at 7.", NOW)
+        personal_calendar.handle_personal_calendar_request("Maybe Nora is actually coming at 8.", NOW)
+        personal_calendar.handle_personal_calendar_request("I went to Nora actually coming at 9 last Friday.", NOW)
+        event = calendar_store.list_events("2026-09-11T00:00:00", "2026-09-12T00:00:00", "America/New_York")[0]
+        self.assertIn("T19:00:00-04:00", event["start"])
+
     def test_workflow_handles_natural_plan_without_llm(self):
         response_handler = Mock()
         result = handle_request("Nora is coming Thursday at 7.", response_handler)
