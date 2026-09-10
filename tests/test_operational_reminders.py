@@ -36,14 +36,17 @@ class OperationalReminderTests(unittest.TestCase):
         self.assertIn("Reminder set", sheila_tasks.handle_request("10:30 in the morning", NOW))
         self.assertIn("2026-09-11T10:30:00", operational_store.list_reminders()[0]["due_at"])
 
-    def test_relative_minutes_are_routed_and_persisted_deterministically(self):
-        text = "Remind me in 3 minutes to test the reminder system"
-        self.assertEqual(route_request(text).capability, "sheila_task")
-        response = sheila_tasks.handle_request(text, NOW)
-        self.assertIn("Reminder set", response)
-        reminder = operational_store.list_reminders()[0]
-        self.assertEqual(reminder["text"], "test the reminder system")
-        self.assertTrue(reminder["due_at"].startswith("2026-09-10T12:03:00"))
+    def test_relative_minutes_are_routed_and_persisted_in_both_word_orders(self):
+        for text in (
+            "Remind me in 2 minutes to text Bo",
+            "Remind me to text Bo in 2 minutes",
+        ):
+            self.assertEqual(route_request(text).capability, "sheila_task")
+            response = sheila_tasks.handle_request(text, NOW)
+            self.assertIn("Reminder set", response)
+        reminders = operational_store.list_reminders()
+        self.assertEqual([item["text"] for item in reminders], ["text Bo", "text Bo"])
+        self.assertTrue(all(item["due_at"].startswith("2026-09-10T12:02:00") for item in reminders))
 
     def test_relative_hours_are_persisted_with_exact_due_time(self):
         response = sheila_tasks.handle_request("Remind me in 2 hours to call Mom", NOW)

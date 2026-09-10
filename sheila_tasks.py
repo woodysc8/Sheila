@@ -17,6 +17,11 @@ _RELATIVE_REMINDER_PATTERN = re.compile(
     r"(?P<unit>seconds?|minutes?|hours?)\s+to\s+(?P<text>.+)$",
     re.IGNORECASE,
 )
+_RELATIVE_DURATION_PATTERN = re.compile(
+    r"\bin\s+(?:(?P<article>an?|the)\s+|(?P<amount>\d+)\s+)"
+    r"(?P<unit>seconds?|minutes?|hours?)\b",
+    re.IGNORECASE,
+)
 
 
 def _zone() -> ZoneInfo:
@@ -97,7 +102,7 @@ def _parse_due(text: str, now: datetime) -> tuple[str | None, str | None]:
 
 def _relative_due(text: str, now: datetime) -> datetime | None:
     """Resolve ``in N minutes/hours`` without involving the model."""
-    match = _RELATIVE_REMINDER_PATTERN.match(text)
+    match = _RELATIVE_DURATION_PATTERN.search(text)
     if not match:
         return None
     amount = 1 if match.group("article") else int(match.group("amount"))
@@ -118,6 +123,7 @@ def _reminder_text(body: str) -> str:
     value = re.sub(r"\b(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\b(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\b(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm|in\s+the\s+morning)\b", "", value, flags=re.IGNORECASE)
+    value = _RELATIVE_DURATION_PATTERN.sub("", value)
     return re.sub(r"\s+", " ", value).strip(" ,.-")
 
 
