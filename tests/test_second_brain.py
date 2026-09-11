@@ -41,13 +41,25 @@ class SecondBrainClientTests(unittest.TestCase):
 
 
 class SheilaMemoryProviderTests(unittest.TestCase):
-    def test_second_brain_provider_is_selected(self):
+    def test_second_brain_provider_is_selected_for_memory_crud(self):
         client = Mock()
+        client.remember.return_value = {"id": "remote-1"}
         client.recall.return_value = [{"id": "remote-1"}]
+        client.update.return_value = {"id": "remote-1", "content": "updated"}
+        client.forget.return_value = True
         with patch.object(config, "SHEILA_MEMORY_BACKEND", "second_brain"), \
                 patch.object(memory.second_brain, "SecondBrainClient", return_value=client):
+            self.assertEqual(
+                memory.remember("preference", "Sam prefers Hyatt.", "user", importance=5),
+                {"id": "remote-1"},
+            )
             self.assertEqual(memory.recall("hotel"), [{"id": "remote-1"}])
+            self.assertEqual(memory.update("remote-1", content="updated"), {"id": "remote-1", "content": "updated"})
+            self.assertTrue(memory.forget("remote-1"))
+        client.remember.assert_called_once_with("preference", "Sam prefers Hyatt.", "user", None, 5, None)
         client.recall.assert_called_once_with("hotel", None, 10)
+        client.update.assert_called_once_with("remote-1", content="updated")
+        client.forget.assert_called_once_with("remote-1")
 
     def test_remote_failure_falls_back_to_local(self):
         with patch.object(config, "SHEILA_MEMORY_BACKEND", "second_brain"), \
