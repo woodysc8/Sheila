@@ -44,7 +44,7 @@ class ConversationalCalendarIntentTests(unittest.TestCase):
         first = personal_calendar._create_definite_event_candidates(REQUEST, NOW)
         second = personal_calendar._create_definite_event_candidates(REQUEST, NOW)
         self.assertIn("Added 6 personal-calendar events", first)
-        self.assertEqual(second, "")
+        self.assertIn("Already on your personal Google Calendar", second)
         events = calendar_store.list_events("2026-09-01T00:00:00", "2026-12-01T00:00:00", "America/New_York")
         self.assertEqual(len(events), 6)
 

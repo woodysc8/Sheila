@@ -77,6 +77,17 @@ class GoogleCalendarAdapterTests(unittest.TestCase):
         self.assertTrue(calendars.success)
         self.assertTrue(calendars.value[0]["primary"])
 
+    def test_list_events_follows_google_page_tokens(self):
+        second = {**self.timed_api_event, "id": "google-456"}
+        self.service.events.return_value.list.return_value.execute.side_effect = [
+            {"items": [self.timed_api_event], "nextPageToken": "next"},
+            {"items": [second]},
+        ]
+        result = self.adapter.list_events(self.start, self.end + timedelta(days=1), limit=10)
+        self.assertTrue(result.success)
+        self.assertEqual([event["id"] for event in result.value], ["google-123", "google-456"])
+        self.assertEqual(self.service.events().list.call_count, 2)
+
     def test_conversational_create_uses_google_adapter_when_calendar_id_is_configured(self):
         adapter = MagicMock()
         adapter.create_event.return_value = calendar.CalendarResult(

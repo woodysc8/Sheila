@@ -45,6 +45,10 @@ PERSONAL_CALENDAR_LOOKUP_PATTERN = re.compile(
     r"\b(?:what do i have|what am i doing|what(?:'s| is) happening|when is|show me my|coming up|what(?:'s| is) on my)\b",
     re.IGNORECASE,
 )
+PERSONAL_CALENDAR_EXISTENCE_PATTERN = re.compile(
+    r"^\s*(?:is|are)\b.*\b(?:on|in)\s+(?:my\s+)?(?:personal\s+)?calendar\b",
+    re.IGNORECASE,
+)
 PERSONAL_CALENDAR_PLAN_PATTERN = re.compile(
     r"(?:\b(?:is coming|are coming|am going|is going|are going|dinner|appointment|game|trivia|plans?)\b"
     r".*\b(?:today|tonight|tomorrow|next|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b|"
@@ -101,7 +105,8 @@ def route_request(user_text: str) -> RoutingDecision:
     is_non_calendar_mutation = any(term in normalized for term in non_calendar_mutation_terms)
     is_tentative_or_historical = PERSONAL_PLAN_EXCLUSION_PATTERN.search(normalized)
     is_generic_calendar_request = _matches(normalized, CALENDAR_TERMS)
-    if (_matches(normalized, PERSONAL_CALENDAR_TERMS) or
+    if (PERSONAL_CALENDAR_EXISTENCE_PATTERN.search(normalized) or
+            _matches(normalized, PERSONAL_CALENDAR_TERMS) or
             ("calendar" in normalized and re.search(r"\b(?:add|put|commit|save|remember)\b", normalized)) or
             (PERSONAL_CALENDAR_LOOKUP_PATTERN.search(normalized) and not is_generic_calendar_request) or
             (not is_tentative_or_historical and not is_generic_calendar_request and

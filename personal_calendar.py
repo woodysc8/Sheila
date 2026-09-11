@@ -12,6 +12,11 @@ import config
 from integrations.calendar import GoogleCalendarAdapter
 
 
+# Ephemeral conversational reference only.  It stores a Google event ID after
+# a confirmed mutation; Google is still consulted before any follow-up action.
+_last_confirmed_event_id: str | None = None
+
+
 def _log(operation: str, **details: object) -> None:
     payload = {"operation": operation, "pid": os.getpid(), "db_path": os.path.abspath(config.DB_PATH), **details}
     print(f"[personal_calendar] {json.dumps(payload, sort_keys=True, default=str)}", flush=True)
@@ -28,8 +33,8 @@ def _google_calendar() -> GoogleCalendarAdapter | None:
 def get_personal_calendar_events(start: datetime, end: datetime) -> list[dict[str, object]]:
     adapter = _google_calendar()
     if adapter:
-        result = adapter.list_events(start, end, limit=2500)
-        _log("google_list", success=result.success)
+        result = adapter.list_events(start, end, limit=10000)
+        _log("google_list", success=result.success, count=len(result.value) if result.success else 0)
         if not result.success:
             raise calendar_store.CalendarError(result.error or "Personal Google Calendar is unavailable.")
         return result.value
@@ -45,6 +50,7 @@ def create_personal_calendar_event(title: str, start: datetime, end: datetime,
         _log("google_create", success=result.success, all_day=all_day)
         if not result.success:
             raise calendar_store.CalendarError(result.error or "Personal Google Calendar write failed.")
+        _remember_confirmed_event(result.value)
         return result.value
     return calendar_store.create_event(title, start, end, description=description, location=location)
 
@@ -65,6 +71,8 @@ def update_personal_calendar_event(event_id: int | str, **changes: object) -> di
                                       str(changes.get("description", event.get("description", ""))),
                                       str(changes.get("location", event.get("location", ""))))
         _log("google_update", success=result.success)
+        if result.success:
+            _remember_confirmed_event(result.value)
         return result.value if result.success else None
     return calendar_store.update_event(event_id, **changes)
 
@@ -74,12 +82,27 @@ def delete_personal_calendar_event(event_id: int | str) -> bool:
     if adapter:
         result = adapter.delete_event(str(event_id))
         _log("google_delete", success=result.success)
+        if result.success:
+            _clear_confirmed_event(str(event_id))
         return result.success
     return calendar_store.delete_event(event_id)
 
 
 def _zone() -> ZoneInfo:
     return config.get_sheila_timezone()
+
+
+def _remember_confirmed_event(event: dict[str, object]) -> None:
+    global _last_confirmed_event_id
+    event_id = str(event.get("id", ""))
+    if event_id:
+        _last_confirmed_event_id = event_id
+
+
+def _clear_confirmed_event(event_id: str) -> None:
+    global _last_confirmed_event_id
+    if _last_confirmed_event_id == event_id:
+        _last_confirmed_event_id = None
 
 
 _WEEKDAYS = {name: index for index, name in enumerate(
@@ -265,7 +288,7 @@ def _find_events(title: str, now: datetime, upcoming_only: bool = False, partial
         if partial else query_tokens == _event_match_tokens(event["title"])
         if exact else query_tokens <= _event_match_tokens(event["title"])
     )]
-    _log("natural_event_match", event_ids=[event["id"] for event in matches])
+    _log("natural_event_match", count=len(matches))
     return matches
 
 
@@ -276,12 +299,35 @@ def _event_line(event: dict[str, object]) -> str:
 
 
 def _log_lookup(events: list[dict[str, object]]) -> None:
-    _log(
-        "natural_lookup_result",
-        event_ids=[event["id"] for event in events],
-        starts=[event["start"] for event in events],
-        ends=[event["end"] for event in events],
-    )
+    _log("natural_lookup_result", count=len(events))
+
+
+def _command_subject(text: str, now: datetime) -> tuple[str, date | None]:
+    """Remove calendar command/date scaffolding before title matching."""
+    date_hint = _date_from_text(text, now)
+    subject = re.sub(r"\b(?:cancel|delete|remove|is|are)\b", " ", text, flags=re.IGNORECASE)
+    subject = re.sub(r"\b(?:the\s+)?(?:personal\s+)?calendar\b", " ", subject, flags=re.IGNORECASE)
+    subject = re.sub(r"\b(?:the\s+)?event\b", " ", subject, flags=re.IGNORECASE)
+    subject = _EXPLICIT_DATE.sub(" ", subject)
+    subject = re.sub(r"\b(?:today|tomorrow|this|next)\s*(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)?\b", " ", subject, flags=re.IGNORECASE)
+    subject = re.sub(r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", " ", subject, flags=re.IGNORECASE)
+    subject = re.sub(r"\b(?:at|from|to|for|on)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b", " ", subject, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", subject).strip(" .,:"), date_hint
+
+
+def _confirmed_followup_event() -> dict[str, object] | None:
+    """Resolve the last conversational reference against Google before use."""
+    if not _last_confirmed_event_id:
+        return None
+    adapter = _google_calendar()
+    if not adapter:
+        return None
+    result = adapter.find_event(_last_confirmed_event_id)
+    if not result.success:
+        _log("google_find", success=False)
+        return None
+    _log("google_find", success=True)
+    return result.value
 
 
 def _display_time(value: datetime) -> str:
@@ -294,7 +340,8 @@ def _is_definite_commitment(text: str) -> bool:
     return bool(re.search(
         r"\b(?:i(?:'m| am)\s+going|taking\s+pto|[a-z][a-z'-]*\s+is\s+coming|"
         r"i\s+have\s+(?:an?\s+)?(?:doctor'?s?\s+)?appointment|appointment|"
-        r"company\s+retreat|alumni\s+weekend|\w+\s+game)\b",
+        r"company\s+retreat|alumni\s+weekend|\w+\s+game|\bpto\b|dominican|zach\s+bryan|"
+        r"\w+\s+arrives?|\w+\s+leaves?|doctor\s+appointment)\b",
         text,
         re.IGNORECASE,
     ))
@@ -310,7 +357,7 @@ def _event_title(statement: str) -> str:
     title = re.sub(r"^\s*going\s+to\s+", "", title, flags=re.IGNORECASE)
     title = re.sub(r"\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b", "", title, flags=re.IGNORECASE)
     title = re.sub(r"\s+(?:in\s+the\s+)?morning\b", "", title, flags=re.IGNORECASE)
-    title = re.sub(r"\s+", " ", title).strip(" ,.-")
+    title = re.sub(r"\s+", " ", title).strip(" ,.-:")
     coming = re.match(r"^(.+?)\s+is\s+coming(?:\s+up)?$", title, re.IGNORECASE)
     if coming:
         return f"{coming.group(1)} coming"
@@ -380,11 +427,13 @@ def _create_definite_event_candidates(user_text: str, now: datetime) -> str | No
     if not candidates:
         return None
     created: list[str] = []
+    existing: list[str] = []
     failed: list[str] = []
     for candidate in candidates:
         try:
             matches = _find_events(candidate.title, now, exact=True, date_hint=candidate.start.date())
             if matches:
+                existing.append(candidate.title)
                 continue
             event = create_personal_calendar_event(candidate.title, candidate.start, candidate.end, all_day=candidate.all_day)
         except (calendar_store.CalendarError, OSError, ValueError):
@@ -401,6 +450,8 @@ def _create_definite_event_candidates(user_text: str, now: datetime) -> str | No
         messages.append(f"Added {len(created)} personal-calendar {noun}: " + "; ".join(created) + ".")
     if failed:
         messages.append("I couldn't add: " + "; ".join(failed) + ".")
+    if existing:
+        messages.append("Already on your personal Google Calendar: " + "; ".join(existing) + ".")
     return " ".join(messages)
 
 
@@ -410,16 +461,24 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
     current = (now or datetime.now(zone)).astimezone(zone)
     text = user_text.strip().rstrip("?.!")
     lowered = text.lower()
+    if _has_tentative_language(text) and re.search(r"\b(?:add|schedule|put|create|book)\b", lowered):
+        return "Please specify a definite calendar commitment before I add it."
     if (_has_tentative_language(text) or _has_historical_language(text)) and re.search(r"\b(?:actually|instead|now|move|reschedule|change|update)\b", lowered):
         return "I didn't change the calendar because that sounded tentative or historical."
+    if re.match(r"^\s*(?:is|are)\b", lowered) and re.search(r"\b(?:on|in)\s+(?:my\s+)?(?:personal\s+)?calendar\b", lowered):
+        subject, date_hint = _command_subject(text, current)
+        matches = _find_events(subject, current, partial=True, date_hint=date_hint) if subject else []
+        return ("It is currently on your personal Google Calendar."
+                if matches else "It is not currently on your personal Google Calendar.")
     if re.search(r"\b(?:cancel|delete|remove)\b|\b(?:isn't|is not|aren't|are not)\b.*\b(?:anymore|off|cancel)|\b(?:is|are)\b.*\b(?:off|cancelled|canceled|anymore)", lowered):
-        title = re.sub(r"^.*?\b(?:cancel|delete|remove)\s+(?:the\s+)?(?:event\s+)?", "", text, flags=re.IGNORECASE).strip()
-        if title == text:
-            title = _natural_event_subject(text)
-        matches = _find_events(title, current)
+        is_followup = bool(re.search(r"\b(?:that|it|this)\s+(?:event|one)\b|^\s*(?:cancel|delete|remove)\s+(?:that|it|this)\b", lowered))
+        confirmed = _confirmed_followup_event() if is_followup else None
+        subject, date_hint = _command_subject(text, current)
+        matches = [confirmed] if confirmed else (_find_events(subject, current, partial=True, date_hint=date_hint) if subject else [])
         if len(matches) != 1:
             return "I need the exact personal-calendar event to delete." if not matches else "I found more than one matching event. Which one should I delete?"
-        delete_personal_calendar_event(matches[0]["id"])
+        if not delete_personal_calendar_event(matches[0]["id"]):
+            return "I couldn't delete that event from your personal Google Calendar."
         return f"Deleted personal-calendar event: {matches[0]['title']}."
     if re.search(r"\b(?:move|reschedule|change|update)\b", lowered):
         match = re.search(r"\b(?:move|reschedule|change|update)\s+(.+?)\s+to\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b", text, re.IGNORECASE)
@@ -433,7 +492,9 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
             end = datetime.fromisoformat(str(event["end"])).astimezone(zone)
             new_date = _date_from_text(date_match.group(2), current)
             moved_start = start.replace(year=new_date.year, month=new_date.month, day=new_date.day)
-            update_personal_calendar_event(event["id"], start=moved_start.isoformat(), end=(moved_start + (end - start)).isoformat())
+            updated = update_personal_calendar_event(event["id"], start=moved_start.isoformat(), end=(moved_start + (end - start)).isoformat())
+            if updated is None:
+                return "I couldn't update that event on your personal Google Calendar."
             return f"Moved {event['title']} to {moved_start:%Y-%m-%d}."
         if not match:
             return "What event should I move, and what time should it have?"
@@ -447,7 +508,9 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
         new_time = _time_from_text(f"at {match.group(2)}", default_meridiem=default_meridiem)
         moved_start = start.replace(hour=new_time.hour, minute=new_time.minute, second=0, microsecond=0)
         moved_end = moved_start + (end - start)
-        update_personal_calendar_event(event["id"], start=moved_start.isoformat(), end=moved_end.isoformat())
+        updated = update_personal_calendar_event(event["id"], start=moved_start.isoformat(), end=moved_end.isoformat())
+        if updated is None:
+            return "I couldn't update that event on your personal Google Calendar."
         return f"Moved {event['title']} to {_display_time(moved_start)} on {moved_start:%Y-%m-%d}."
     if re.search(r"\b(?:actually|instead|now)\b", lowered) and _has_time(text):
         subject = _natural_event_subject(text)
@@ -508,17 +571,27 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
         time_range = _time_range_from_text(command)
         start_time = time_range[0] if time_range else _time_from_text(command)
         event_date = _date_from_text(command, current)
-        if not start_time or not event_date:
-            return "Please specify the event date and time before I add it."
+        if not event_date:
+            return "Please specify the event date before I add it."
         called_title = re.search(r"\bcalled\s+(.+?)(?=\s+\d{1,2}(?::\d{2})?\s*-\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|$)", command, re.IGNORECASE)
-        title = called_title.group(1).strip(" ,") if called_title else re.split(r"\b(?:today|tomorrow|on\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|at\s+\d)", command, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
+        title = called_title.group(1).strip(" ,") if called_title else re.split(r"\b(?:today|tomorrow|on|for)\s+(?:(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:january|february|march|april|may|june|july|august|september|october|november|december)|\d)|at\s+\d", command, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
+        title = re.sub(r"\s+to\s+(?:my\s+)?personal\s+calendar\b", "", title, flags=re.IGNORECASE).strip(" ,")
+        title = re.sub(r"\b(?:today|tomorrow)\b", "", title, flags=re.IGNORECASE).strip(" ,")
+        title = _EXPLICIT_DATE.sub("", title)
+        title = re.sub(r"\bas\s+(?:an?\s+)?all[ -]?day\s+(?:personal\s+)?google\s+calendar\s+event\b", "", title, flags=re.IGNORECASE).strip(" ,")
         if not title:
             return "Please give the event a title before I add it."
-        start = datetime.combine(event_date, start_time, tzinfo=zone)
-        end = datetime.combine(event_date, time_range[1], tzinfo=zone) if time_range else start + timedelta(hours=1)
+        all_day = start_time is None
+        start = datetime.combine(event_date, start_time or time.min, tzinfo=zone)
+        end = (datetime.combine(event_date, time_range[1], tzinfo=zone) if time_range
+               else (datetime.combine(event_date + timedelta(days=1), time.min, tzinfo=zone) if all_day else start + timedelta(hours=1)))
         if end <= start:
             end += timedelta(days=1)
-        event = create_personal_calendar_event(title, start, end)
+        if _find_events(title, current, exact=True, date_hint=event_date):
+            return f"{title} is already on your personal Google Calendar."
+        event = create_personal_calendar_event(title, start, end, all_day=all_day)
+        if all_day:
+            return f"Added {event['title']} to your personal calendar for {start:%Y-%m-%d} as an all-day event."
         return f"Added {event['title']} to your personal calendar for {start:%Y-%m-%d} at {_display_time(start)}."
     if _is_definite_plan(text):
         event_date = _date_from_text(text, current)
@@ -531,7 +604,9 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
                 event = matches[0]
                 old_start = datetime.fromisoformat(str(event["start"])).astimezone(zone)
                 old_end = datetime.fromisoformat(str(event["end"])).astimezone(zone)
-                update_personal_calendar_event(event["id"], start=start.isoformat(), end=(start + (old_end - old_start)).isoformat())
+                updated = update_personal_calendar_event(event["id"], start=start.isoformat(), end=(start + (old_end - old_start)).isoformat())
+                if updated is None:
+                    return "I couldn't update that event on your personal Google Calendar."
                 return "Updated it."
             if len(matches) > 1:
                 return "Which matching personal-calendar event do you mean?"

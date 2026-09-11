@@ -105,7 +105,26 @@ class GoogleCalendarAdapter:
             return service
         timezone = config.get_sheila_timezone()
         try:
-            items = service.value.events().list(calendarId=self.calendar_id, timeMin=time_min.astimezone(timezone).isoformat(), timeMax=time_max.astimezone(timezone).isoformat(), singleEvents=True, orderBy="startTime", maxResults=min(max(limit, 1), 2500)).execute().get("items", [])
+            # Calendar returns at most 2,500 events per page.  Follow every
+            # page token so conversational lookup never silently misses an
+            # event merely because the requested range is busy.
+            items: list[dict[str, Any]] = []
+            page_token: str | None = None
+            page_size = min(max(limit, 1), 2500)
+            while len(items) < limit:
+                page = service.value.events().list(
+                    calendarId=self.calendar_id,
+                    timeMin=time_min.astimezone(timezone).isoformat(),
+                    timeMax=time_max.astimezone(timezone).isoformat(),
+                    singleEvents=True,
+                    orderBy="startTime",
+                    maxResults=min(page_size, limit - len(items)),
+                    pageToken=page_token,
+                ).execute()
+                items.extend(page.get("items", []))
+                page_token = page.get("nextPageToken")
+                if not page_token:
+                    break
             return CalendarResult(True, [normalize_event(event, self.calendar_id) for event in items])
         except Exception as exc:
             return CalendarResult(False, error=f"Google Calendar event retrieval failed: {exc}")
