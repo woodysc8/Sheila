@@ -31,10 +31,49 @@ class OperationalReminderTests(unittest.TestCase):
         self.assertEqual(calendar_store.get_event(event["id"])["title"], "Durable")
         self.assertEqual(operational_store.list_reminders()[0]["id"], reminder["id"])
 
-    def test_pending_tmw_and_morning_time(self):
-        self.assertIn("What time", sheila_tasks.handle_request("Remind me to text Bo tmw", NOW))
-        self.assertIn("Reminder set", sheila_tasks.handle_request("10:30 in the morning", NOW))
-        self.assertIn("2026-09-11T10:30:00", operational_store.list_reminders()[0]["due_at"])
+    def test_tomorrow_without_time_uses_nine_am(self):
+        response = sheila_tasks.handle_request("Remind me to text Bo tmw", NOW)
+        self.assertIn("tomorrow at 9:00 AM", response)
+        self.assertIn("2026-09-11T09:00:00", operational_store.list_reminders()[0]["due_at"])
+
+    def test_undated_reminder_two_hour_default_time_boundaries(self):
+        cases = (
+            ((10, 0), "2026-09-10T12:00:00", "today at 12:00 PM"),
+            ((16, 0), "2026-09-10T18:00:00", "today at 6:00 PM"),
+            ((18, 0), "2026-09-10T20:00:00", "today at 8:00 PM"),
+            ((19, 0), "2026-09-11T13:00:00", "tomorrow at 1:00 PM"),
+            ((20, 29), "2026-09-11T13:00:00", "tomorrow at 1:00 PM"),
+            ((20, 30), "2026-09-11T13:00:00", "tomorrow at 1:00 PM"),
+            ((23, 0), "2026-09-11T13:00:00", "tomorrow at 1:00 PM"),
+            ((3, 0), "2026-09-10T13:00:00", "today at 1:00 PM"),
+            ((5, 59), "2026-09-10T13:00:00", "today at 1:00 PM"),
+            ((6, 0), "2026-09-10T08:00:00", "today at 8:00 AM"),
+        )
+        for (hour, minute), expected_due, expected_confirmation in cases:
+            with self.subTest(hour=hour, minute=minute):
+                current = datetime(2026, 9, 10, hour, minute, tzinfo=ET)
+                before_count = len(operational_store.list_reminders())
+                response = sheila_tasks.handle_request("Remind me to get shampoo", current)
+                reminders = operational_store.list_reminders()
+                self.assertEqual(len(reminders), before_count + 1)
+                self.assertTrue(any(
+                    reminder["text"] == "get shampoo" and reminder["due_at"].startswith(expected_due)
+                    for reminder in reminders
+                ))
+                self.assertIn(expected_confirmation, response)
+
+    def test_explicit_time_without_date_uses_next_local_occurrence(self):
+        self.assertIn("today at 5:00 PM", sheila_tasks.handle_request("Remind me to get shampoo at 5 PM", NOW))
+        self.assertTrue(operational_store.list_reminders()[0]["due_at"].startswith("2026-09-10T17:00:00"))
+        after_five = datetime(2026, 9, 10, 17, 1, tzinfo=ET)
+        self.assertIn("tomorrow at 5:00 PM", sheila_tasks.handle_request("Remind me to call Mom at 5 PM", after_five))
+        self.assertTrue(operational_store.list_reminders()[1]["due_at"].startswith("2026-09-11T17:00:00"))
+
+    def test_default_confirmation_requires_successful_persistence(self):
+        with patch.object(operational_store, "create_reminder", side_effect=RuntimeError("database unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "database unavailable"):
+                sheila_tasks.handle_request("Remind me to get shampoo", NOW)
+        self.assertEqual(operational_store.list_reminders(), [])
 
     def test_relative_minutes_are_routed_and_persisted_in_both_word_orders(self):
         for text in (
@@ -59,10 +98,9 @@ class OperationalReminderTests(unittest.TestCase):
         self.assertEqual(sheila_tasks._parse_due("Remind me in an hour to stretch", NOW)[1], "2026-09-10T13:00:00-04:00")
         self.assertEqual(sheila_tasks._parse_due("Remind me in 30 seconds to test", NOW)[1], "2026-09-10T12:00:30-04:00")
 
-    def test_configured_user_id_owns_pending_clarification(self):
+    def test_configured_user_id_owns_default_reminder(self):
         with patch.object(config, "SHEILA_USER_ID", "sam-production"):
             sheila_tasks.handle_request("Remind me to text Bo tomorrow", NOW)
-            self.assertIn("Reminder set", sheila_tasks.handle_request("10:30 in the morning", NOW))
             self.assertEqual(operational_store.list_reminders("sam-production")[0]["text"], "text Bo")
 
     def test_monthly_multiple_dates_and_next_delivery(self):

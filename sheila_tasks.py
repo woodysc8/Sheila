@@ -140,6 +140,49 @@ def _next_monthly_due(day: int, current: datetime) -> datetime:
             year, month = year + 1, 1
 
 
+def _default_due(current: datetime) -> datetime:
+    """Schedule an unscheduled reminder two hours out, avoiding overnight delivery."""
+    # Early-morning requests are deferred to that day's convenient afternoon slot.
+    # This preserves the 5:59 AM boundary in the product rule.
+    if current.time() < time(6):
+        return datetime.combine(current.date(), time(13), tzinfo=_zone())
+    candidate = current + timedelta(hours=2)
+    if candidate.time() >= time(20, 30):
+        return datetime.combine(candidate.date() + timedelta(days=1), time(13), tzinfo=_zone())
+    if candidate.time() < time(6):
+        return datetime.combine(candidate.date(), time(13), tzinfo=_zone())
+    return candidate
+
+
+def _next_time_due(reminder_time: time, current: datetime) -> datetime:
+    """Return the next local occurrence of an explicitly supplied clock time."""
+    candidate = datetime.combine(current.date(), reminder_time, tzinfo=_zone())
+    return candidate if candidate >= current else candidate + timedelta(days=1)
+
+
+def _has_explicit_time(text: str) -> bool:
+    """Avoid treating unrelated numbers in reminder text as a time of day."""
+    return bool(re.search(
+        r"\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b|"
+        r"\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\bin\s+the\s+morning\b",
+        text,
+        re.IGNORECASE,
+    ))
+
+
+def _due_day_label(due: datetime, current: datetime) -> str:
+    if due.date() == current.date():
+        return "today"
+    if due.date() == current.date() + timedelta(days=1):
+        return "tomorrow"
+    return f"on {due.strftime('%B')} {due.day}"
+
+
+def _default_confirmation(due: datetime, day: str) -> str:
+    human_time = due.strftime("%I:%M %p").lstrip("0")
+    return f"Got it. I'll remind you {day} at {human_time}."
+
+
 def _operational_create(text: str, current: datetime) -> str | None:
     """Create a durable reminder or retain deterministic missing-time state."""
     relative = _RELATIVE_REMINDER_PATTERN.match(text)
@@ -172,12 +215,24 @@ def _operational_create(text: str, current: datetime) -> str | None:
                 day = int(raw_day); due = _next_monthly_due(day, current)
                 operational_store.create_reminder(reminder_text or "Monthly reminder", due, config.SHEILA_TIMEZONE, {"type":"monthly_day","day":day}, config.SHEILA_USER_ID); created.append(str(day))
         return "Reminder set: monthly on " + " and ".join(created) + "."
+    if not reminder_text:
+        return "Please specify what I should remind you about."
     due_date, due_at = _parse_due(body, current)
     if due_date is None:
-        return "Please specify when I should remind you."
+        if _has_explicit_time(body):
+            reminder_time = _time_from_text(body)
+            if reminder_time is None:
+                return "Please specify when I should remind you."
+            due = _next_time_due(reminder_time, current)
+            operational_store.create_reminder(reminder_text, due, config.SHEILA_TIMEZONE, user_id=config.SHEILA_USER_ID)
+            return _default_confirmation(due, _due_day_label(due, current))
+        due = _default_due(current)
+        operational_store.create_reminder(reminder_text, due, config.SHEILA_TIMEZONE, user_id=config.SHEILA_USER_ID)
+        return _default_confirmation(due, _due_day_label(due, current))
     if due_at is None:
-        operational_store.save_pending(config.SHEILA_USER_ID, reminder_text, due_date, config.SHEILA_TIMEZONE, current + timedelta(hours=24))
-        return "What time should I remind you?"
+        due = datetime.combine(date.fromisoformat(due_date), time(9), tzinfo=_zone())
+        operational_store.create_reminder(reminder_text, due, config.SHEILA_TIMEZONE, user_id=config.SHEILA_USER_ID)
+        return _default_confirmation(due, _due_day_label(due, current))
     operational_store.create_reminder(reminder_text, datetime.fromisoformat(due_at), config.SHEILA_TIMEZONE, user_id=config.SHEILA_USER_ID)
     return f"Reminder set: {reminder_text}."
 
