@@ -190,6 +190,16 @@ except ValueError:
     SECOND_BRAIN_TIMEOUT = 10.0
 
 # ---------------------------------------------------------------------------
+# CENTER EXECUTION
+# ---------------------------------------------------------------------------
+# Center remains a separate execution/delegation project.  Sheila only loads
+# its explicitly configured local Python interface when asked to submit work.
+SHEILA_CENTER_PATH = os.environ.get("SHEILA_CENTER_PATH", "").strip().strip('"').strip("'")
+SHEILA_CENTER_HANDLER = os.environ.get(
+    "SHEILA_CENTER_HANDLER", "delegation.handle_message"
+).strip()
+
+# ---------------------------------------------------------------------------
 # AUDIO
 # ---------------------------------------------------------------------------
 SAMPLE_RATE = 16000

@@ -103,16 +103,24 @@ class MigrationTests(unittest.TestCase):
 
     def test_dry_run_performs_zero_remote_writes_and_preserves_local_row(self):
         local_id = self._insert()
-        before = memory._connect().execute(
-            "SELECT * FROM structured_memories WHERE id = ?", (local_id,)
-        ).fetchone()
+        before_conn = memory._connect()
+        try:
+            before = before_conn.execute(
+                "SELECT * FROM structured_memories WHERE id = ?", (local_id,)
+            ).fetchone()
+        finally:
+            before_conn.close()
         client = FakeSecondBrainClient()
 
         report = migrate_memory.migrate(dry_run=True, client=client)
 
-        after = memory._connect().execute(
-            "SELECT * FROM structured_memories WHERE id = ?", (local_id,)
-        ).fetchone()
+        after_conn = memory._connect()
+        try:
+            after = after_conn.execute(
+                "SELECT * FROM structured_memories WHERE id = ?", (local_id,)
+            ).fetchone()
+        finally:
+            after_conn.close()
         self.assertEqual(report["total_local_memories"], 1)
         self.assertEqual(report["would_create"][0]["action"], "create")
         self.assertEqual(client.remember_calls, [])
