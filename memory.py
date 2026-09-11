@@ -481,6 +481,15 @@ def log_exchange(user_text: str, assistant_text: str, important: bool = False):
     conn.close()
 
 
+def get_latest_user_text() -> str | None:
+    """Return the immediately preceding user turn for a narrow local follow-up."""
+    init_db()
+    conn = sqlite3.connect(config.DB_PATH)
+    row = conn.execute("SELECT user_text FROM exchanges ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    return str(row[0]) if row else None
+
+
 def get_context(n: int = None, current_query: str = "") -> str:
     """Pull recent exchanges + all important-tagged ones + anything from the
     full history that shares keywords with the current query, formatted for

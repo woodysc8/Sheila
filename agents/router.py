@@ -97,11 +97,12 @@ def route_request(user_text: str) -> RoutingDecision:
         return RoutingDecision("Sheila", "sheila_task", False, "This request needs Sheila's reminder and task store.", "sheila_task")
     if REMINDER_TIME_REPLY_PATTERN.match(user_text):
         return RoutingDecision("Sheila", "sheila_task", False, "This may complete Sheila's pending reminder.", "sheila_task")
-    non_calendar_mutation_terms = ("file", "document", "task", "email", "memory")
+    non_calendar_mutation_terms = ("file", "document", "task", "email")
     is_non_calendar_mutation = any(term in normalized for term in non_calendar_mutation_terms)
     is_tentative_or_historical = PERSONAL_PLAN_EXCLUSION_PATTERN.search(normalized)
     is_generic_calendar_request = _matches(normalized, CALENDAR_TERMS)
     if (_matches(normalized, PERSONAL_CALENDAR_TERMS) or
+            ("calendar" in normalized and re.search(r"\b(?:add|put|commit|save|remember)\b", normalized)) or
             (PERSONAL_CALENDAR_LOOKUP_PATTERN.search(normalized) and not is_generic_calendar_request) or
             (not is_tentative_or_historical and not is_generic_calendar_request and
              (PERSONAL_CALENDAR_PLAN_PATTERN.search(normalized) or

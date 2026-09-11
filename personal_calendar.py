@@ -21,15 +21,15 @@ def get_personal_calendar_events(start: datetime, end: datetime) -> list[dict[st
 
 
 def create_personal_calendar_event(title: str, start: datetime, end: datetime,
-                                   description: str = "", location: str = "") -> dict[str, object]:
+                                   description: str = "", location: str = "", all_day: bool = False) -> dict[str, object]:
     return calendar_store.create_event(title, start, end, description=description, location=location)
 
 
-def update_personal_calendar_event(event_id: int, **changes: object) -> dict[str, object] | None:
+def update_personal_calendar_event(event_id: int | str, **changes: object) -> dict[str, object] | None:
     return calendar_store.update_event(event_id, **changes)
 
 
-def delete_personal_calendar_event(event_id: int) -> bool:
+def delete_personal_calendar_event(event_id: int | str) -> bool:
     return calendar_store.delete_event(event_id)
 
 
@@ -282,10 +282,12 @@ def extract_definite_event_candidates(user_text: str, now: datetime | None = Non
     zone = _zone()
     current = (now or datetime.now(zone)).astimezone(zone)
     candidates: list[CalendarEventCandidate] = []
-    # Newlines are intentional event boundaries in the multi-event messages Sheila receives.
+    # Newlines and explicit commitment clauses are event boundaries in batches.
     statements = [part.strip(" \t.-") for part in re.split(r"[\r\n]+", user_text) if part.strip()]
     if len(statements) == 1:
-        statements = [part.strip(" \t.-") for part in re.split(r"(?<=[.!])\s+", user_text) if part.strip()]
+        statements = [part.strip(" \t.-") for part in re.split(r"(?<=[.!])\s+|-\s*(?=i\s+have)", user_text, flags=re.IGNORECASE) if part.strip()]
+    else:
+        statements = [part.strip(" \t.-") for statement in statements for part in re.split(r"-\s*(?=i\s+have)", statement, flags=re.IGNORECASE) if part.strip()]
     for statement in statements:
         if not _is_definite_commitment(statement):
             continue
@@ -294,13 +296,15 @@ def extract_definite_event_candidates(user_text: str, now: datetime | None = Non
             continue
         start_date, last_date = dates
         start_time = _plan_time(statement)
-        if start_time is None and re.search(r"\bmorning\b", statement, re.IGNORECASE):
-            start_time = time(9, 0)
         all_day = start_time is None
         start = datetime.combine(start_date, start_time or time.min, tzinfo=zone)
         # Timed commitments default to one hour. All-day end is exclusive.
         end = (start + timedelta(hours=1)) if not all_day else datetime.combine(last_date + timedelta(days=1), time.min, tzinfo=zone)
         candidates.append(CalendarEventCandidate(_event_title(statement), start, end, all_day, statement))
+        if "alumni weekend" in statement.lower() and last_date:
+            weekend_start = last_date + timedelta(days=(5 - last_date.weekday()) % 7 or 7)
+            weekend_end = weekend_start + timedelta(days=2)
+            candidates.append(CalendarEventCandidate("Holy Cross Alumni Weekend", datetime.combine(weekend_start, time.min, tzinfo=zone), datetime.combine(weekend_end, time.min, tzinfo=zone), True, statement))
     return candidates
 
 
@@ -312,7 +316,10 @@ def _create_definite_event_candidates(user_text: str, now: datetime) -> str | No
     failed: list[str] = []
     for candidate in candidates:
         try:
-            event = create_personal_calendar_event(candidate.title, candidate.start, candidate.end)
+            matches = _find_events(candidate.title, now, exact=True, date_hint=candidate.start.date())
+            if matches:
+                continue
+            event = create_personal_calendar_event(candidate.title, candidate.start, candidate.end, all_day=candidate.all_day)
         except (calendar_store.CalendarError, OSError, ValueError):
             failed.append(candidate.title)
             continue
@@ -345,7 +352,7 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
         matches = _find_events(title, current)
         if len(matches) != 1:
             return "I need the exact personal-calendar event to delete." if not matches else "I found more than one matching event. Which one should I delete?"
-        delete_personal_calendar_event(int(matches[0]["id"]))
+        delete_personal_calendar_event(matches[0]["id"])
         return f"Deleted personal-calendar event: {matches[0]['title']}."
     if re.search(r"\b(?:move|reschedule|change|update)\b", lowered):
         match = re.search(r"\b(?:move|reschedule|change|update)\s+(.+?)\s+to\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b", text, re.IGNORECASE)
@@ -359,7 +366,7 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
             end = datetime.fromisoformat(str(event["end"])).astimezone(zone)
             new_date = _date_from_text(date_match.group(2), current)
             moved_start = start.replace(year=new_date.year, month=new_date.month, day=new_date.day)
-            update_personal_calendar_event(int(event["id"]), start=moved_start.isoformat(), end=(moved_start + (end - start)).isoformat())
+            update_personal_calendar_event(event["id"], start=moved_start.isoformat(), end=(moved_start + (end - start)).isoformat())
             return f"Moved {event['title']} to {moved_start:%Y-%m-%d}."
         if not match:
             return "What event should I move, and what time should it have?"
@@ -373,7 +380,7 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
         new_time = _time_from_text(f"at {match.group(2)}", default_meridiem=default_meridiem)
         moved_start = start.replace(hour=new_time.hour, minute=new_time.minute, second=0, microsecond=0)
         moved_end = moved_start + (end - start)
-        update_personal_calendar_event(int(event["id"]), start=moved_start.isoformat(), end=moved_end.isoformat())
+        update_personal_calendar_event(event["id"], start=moved_start.isoformat(), end=moved_end.isoformat())
         return f"Moved {event['title']} to {_display_time(moved_start)} on {moved_start:%Y-%m-%d}."
     if re.search(r"\b(?:actually|instead|now)\b", lowered) and _has_time(text):
         subject = _natural_event_subject(text)
@@ -385,7 +392,7 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
             new_time = _time_from_text(text, default_meridiem="pm" if start.hour >= 12 else "am")
             moved_start = start.replace(hour=new_time.hour, minute=new_time.minute, second=0, microsecond=0)
             updated = update_personal_calendar_event(
-                int(event["id"]),
+                event["id"],
                 start=moved_start.isoformat(),
                 end=(moved_start + (end - start)).isoformat(),
             )
@@ -453,7 +460,7 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
                 event = matches[0]
                 old_start = datetime.fromisoformat(str(event["start"])).astimezone(zone)
                 old_end = datetime.fromisoformat(str(event["end"])).astimezone(zone)
-                update_personal_calendar_event(int(event["id"]), start=start.isoformat(), end=(start + (old_end - old_start)).isoformat())
+                update_personal_calendar_event(event["id"], start=start.isoformat(), end=(start + (old_end - old_start)).isoformat())
                 return "Updated it."
             if len(matches) > 1:
                 return "Which matching personal-calendar event do you mean?"

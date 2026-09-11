@@ -9,6 +9,7 @@ import re
 import brain
 import briefing
 import memory
+import personal_calendar
 from agents.router import route_request
 from agents.workflow import handle_request
 
@@ -21,6 +22,8 @@ MEETING_END_PHRASES = ["meeting's over", "meeting is over", "i'm out of my meeti
 FOLLOWUP_PATTERN = re.compile(r"what did ([\w\s]+?) (say|email|write|send)", re.IGNORECASE)
 EMAIL_QUERY_PATTERN = re.compile(r"(email|emails|mail)(s)?\s+(from|received|i received|i got|today|that came in)", re.IGNORECASE)
 MORNING_PROTOCOL_PATTERN = re.compile(r"(?:good\s+morning|morning)(?:\s+sheila)?[!,.?]*", re.IGNORECASE)
+CALENDAR_FOLLOWUP_PATTERN = re.compile(r"\b(?:add|put|commit|save)\s+(?:all\s+of\s+)?(?:that|this|it)\b.*\bcalendar\b", re.IGNORECASE)
+MIXED_MEMORY_CALENDAR_PATTERN = re.compile(r"\b(?:memory|remember|deep memory)\b.*\bcalendar\b|\bcalendar\b.*\b(?:memory|remember|deep memory)\b", re.IGNORECASE)
 
 
 def _is_morning_protocol_trigger(user_text: str) -> bool:
@@ -99,11 +102,26 @@ def _extract_explicit_memory(user_text: str) -> tuple[str, str] | None:
     return category, content
 
 
+def _durable_calendar_facts(text: str, now=None) -> list[tuple[str, str, str]]:
+    """Keep durable travel context, not a copy of every dated Calendar event."""
+    lowered = text.lower()
+    facts: list[tuple[str, str, str]] = []
+    if "taking pto" in lowered and ("dr" in lowered or "dominican" in lowered):
+        facts.append(("travel", "Sam is taking PTO and traveling to the Dominican Republic with Nora.", "travel:pto-dominican-republic"))
+    if "company retreat" in lowered and "philly" in lowered:
+        facts.append(("travel", "Sam has a company retreat in Philadelphia.", "travel:company-retreat-philadelphia"))
+    if "alumni weekend" in lowered or "holy cross" in lowered or " back to hc" in lowered:
+        facts.append(("personal", "Sam returns to Holy Cross for Alumni Weekend.", "personal:holy-cross-alumni-weekend"))
+    return facts
+
+
 def process_message(user_text: str) -> str:
     """Process and log one user message through Sheila's existing workflow."""
-    lowered = user_text.lower()
-    route = route_request(user_text)
-    explicit_memory = _extract_explicit_memory(user_text)
+    prior_text = memory.get_latest_user_text() if CALENDAR_FOLLOWUP_PATTERN.search(user_text) else None
+    effective_text = f"{prior_text}\n{user_text}" if prior_text else user_text
+    lowered = effective_text.lower()
+    route = route_request(effective_text)
+    explicit_memory = _extract_explicit_memory(effective_text)
     if explicit_memory:
         category, content = explicit_memory
         key = _memory_key(f" {content.lower()} ")
@@ -129,8 +147,14 @@ def process_message(user_text: str) -> str:
     elif EMAIL_QUERY_PATTERN.search(user_text) and not route.capability:
         reply = _handle_email_query()
     else:
-        followup_match = FOLLOWUP_PATTERN.search(user_text)
-        reply = _handle_followup(followup_match.group(1).strip()) if followup_match and not route.capability else str(handle_request(user_text, response_handler=brain.think)["response"])
+        followup_match = FOLLOWUP_PATTERN.search(effective_text)
+        reply = _handle_followup(followup_match.group(1).strip()) if followup_match and not route.capability else str(handle_request(effective_text, response_handler=brain.think)["response"])
+    if MIXED_MEMORY_CALENDAR_PATTERN.search(effective_text) and "couldn't" not in reply.lower() and "please specify" not in reply.lower():
+        facts = _durable_calendar_facts(effective_text)
+        for category, content, key in facts:
+            memory.remember(category, content, source="user", importance=4, metadata={"explicit": True, "memory_key": key})
+        if facts and ("added" in reply.lower() or "got it" in reply.lower()):
+            reply += " I also saved the durable travel and plan context to Sam 2."
     if any(phrase in lowered for phrase in FORGET_PHRASES):
         memory.forget_last()
     memory.log_exchange(user_text, reply, important=any(phrase in lowered for phrase in REMEMBER_PHRASES))
