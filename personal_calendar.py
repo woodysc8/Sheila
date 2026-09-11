@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import calendar_store
 import config
+from integrations.calendar import GoogleCalendarAdapter
 
 
 def _log(operation: str, **details: object) -> None:
@@ -16,20 +17,64 @@ def _log(operation: str, **details: object) -> None:
     print(f"[personal_calendar] {json.dumps(payload, sort_keys=True, default=str)}", flush=True)
 
 
+def _google_calendar() -> GoogleCalendarAdapter | None:
+    """Use the configured Google Calendar ID; retain legacy compatibility for an ICS URL."""
+    calendar_id = config.SHEILA_PERSONAL_GOOGLE_CALENDAR_ID.strip()
+    if not calendar_id or "://" in calendar_id:
+        return None
+    return GoogleCalendarAdapter(calendar_id)
+
+
 def get_personal_calendar_events(start: datetime, end: datetime) -> list[dict[str, object]]:
+    adapter = _google_calendar()
+    if adapter:
+        result = adapter.list_events(start, end, limit=2500)
+        _log("google_list", success=result.success)
+        if not result.success:
+            raise calendar_store.CalendarError(result.error or "Personal Google Calendar is unavailable.")
+        return result.value
     return calendar_store.list_events(start, end)
 
 
 def create_personal_calendar_event(title: str, start: datetime, end: datetime,
                                    description: str = "", location: str = "", all_day: bool = False) -> dict[str, object]:
+    adapter = _google_calendar()
+    if adapter:
+        result = adapter.create_event(title, start.date() if all_day else start, end.date() if all_day else end,
+                                      description, location)
+        _log("google_create", success=result.success, all_day=all_day)
+        if not result.success:
+            raise calendar_store.CalendarError(result.error or "Personal Google Calendar write failed.")
+        return result.value
     return calendar_store.create_event(title, start, end, description=description, location=location)
 
 
 def update_personal_calendar_event(event_id: int | str, **changes: object) -> dict[str, object] | None:
+    adapter = _google_calendar()
+    if adapter:
+        existing = adapter.find_event(str(event_id))
+        if not existing.success:
+            _log("google_update", success=False)
+            return None
+        event = existing.value
+        all_day = bool(event.get("all_day"))
+        start, end = changes.get("start", event["start"]), changes.get("end", event["end"])
+        if all_day:
+            start, end = date.fromisoformat(str(start)[:10]), date.fromisoformat(str(end)[:10])
+        result = adapter.update_event(str(event_id), str(changes.get("title", event["title"])), start, end,
+                                      str(changes.get("description", event.get("description", ""))),
+                                      str(changes.get("location", event.get("location", ""))))
+        _log("google_update", success=result.success)
+        return result.value if result.success else None
     return calendar_store.update_event(event_id, **changes)
 
 
 def delete_personal_calendar_event(event_id: int | str) -> bool:
+    adapter = _google_calendar()
+    if adapter:
+        result = adapter.delete_event(str(event_id))
+        _log("google_delete", success=result.success)
+        return result.success
     return calendar_store.delete_event(event_id)
 
 
@@ -119,6 +164,28 @@ def _time_from_text(text: str, default_meridiem: str | None = None) -> time | No
     if hour > 23 or minute > 59:
         return None
     return time(hour, minute)
+
+
+def _time_range_from_text(text: str) -> tuple[time, time] | None:
+    """Parse an explicit range such as ``3-4pm`` without guessing its duration."""
+    match = re.search(
+        r"\b(\d{1,2})(?::(\d{2}))?\s*-\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    first_hour, first_minute = int(match.group(1)), int(match.group(2) or 0)
+    last_hour, last_minute = int(match.group(3)), int(match.group(4) or 0)
+    if not all((1 <= first_hour <= 12, 1 <= last_hour <= 12, first_minute < 60, last_minute < 60)):
+        return None
+    if match.group(5).lower() == "pm":
+        first_hour = first_hour + 12 if first_hour < 12 else first_hour
+        last_hour = last_hour + 12 if last_hour < 12 else last_hour
+    else:
+        first_hour = 0 if first_hour == 12 else first_hour
+        last_hour = 0 if last_hour == 12 else last_hour
+    return time(first_hour, first_minute), time(last_hour, last_minute)
 
 
 def _has_tentative_language(text: str) -> bool:
@@ -438,15 +505,19 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
         return committed
     if re.search(r"\b(?:add|schedule|put|create|book)\b", lowered):
         command = re.sub(r"^.*?\b(?:add|schedule|put|create|book)\s+(?:an?\s+)?", "", text, flags=re.IGNORECASE)
-        start_time = _time_from_text(command)
+        time_range = _time_range_from_text(command)
+        start_time = time_range[0] if time_range else _time_from_text(command)
         event_date = _date_from_text(command, current)
         if not start_time or not event_date:
             return "Please specify the event date and time before I add it."
-        title = re.split(r"\b(?:today|tomorrow|on\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|at\s+\d)", command, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
+        called_title = re.search(r"\bcalled\s+(.+?)(?=\s+\d{1,2}(?::\d{2})?\s*-\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|$)", command, re.IGNORECASE)
+        title = called_title.group(1).strip(" ,") if called_title else re.split(r"\b(?:today|tomorrow|on\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|at\s+\d)", command, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
         if not title:
             return "Please give the event a title before I add it."
         start = datetime.combine(event_date, start_time, tzinfo=zone)
-        end = start + timedelta(hours=1)
+        end = datetime.combine(event_date, time_range[1], tzinfo=zone) if time_range else start + timedelta(hours=1)
+        if end <= start:
+            end += timedelta(days=1)
         event = create_personal_calendar_event(title, start, end)
         return f"Added {event['title']} to your personal calendar for {start:%Y-%m-%d} at {_display_time(start)}."
     if _is_definite_plan(text):

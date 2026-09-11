@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from integrations import calendar
 from integrations.calendar import GoogleCalendarAdapter
+import personal_calendar
 
 
 class GoogleCalendarAdapterTests(unittest.TestCase):
@@ -75,6 +76,23 @@ class GoogleCalendarAdapterTests(unittest.TestCase):
         self.assertEqual(found.value["id"], "google-123")
         self.assertTrue(calendars.success)
         self.assertTrue(calendars.value[0]["primary"])
+
+    def test_conversational_create_uses_google_adapter_when_calendar_id_is_configured(self):
+        adapter = MagicMock()
+        adapter.create_event.return_value = calendar.CalendarResult(
+            True, {"id": "google-1", "title": "Sheila Calendar Test"}
+        )
+        with patch.object(personal_calendar.config, "SHEILA_PERSONAL_GOOGLE_CALENDAR_ID", "woodysc7@gmail.com"), \
+             patch.object(personal_calendar, "GoogleCalendarAdapter", return_value=adapter):
+            response = personal_calendar.handle_personal_calendar_request(
+                "Add a test event to my personal calendar tomorrow called Sheila Calendar Test 3-4pm",
+                datetime(2026, 9, 11, 12, tzinfo=timezone.utc),
+            )
+        self.assertIn("Added", response)
+        adapter.create_event.assert_called_once()
+        self.assertEqual(adapter.create_event.call_args.args[0], "Sheila Calendar Test")
+        self.assertEqual(adapter.create_event.call_args.args[1].hour, 15)
+        self.assertEqual(adapter.create_event.call_args.args[2].hour, 16)
 
 
 if __name__ == "__main__":
