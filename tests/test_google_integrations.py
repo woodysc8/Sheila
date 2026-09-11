@@ -9,7 +9,11 @@ from unittest.mock import MagicMock, patch
 
 from integrations import calendar, drive, gmail
 import config
-from integrations.google_auth import GoogleAuthError, READ_ONLY_SCOPES, load_credentials
+from integrations.google_auth import (
+    GoogleAuthError, PERSONAL_CALENDAR_SCOPES, READ_ONLY_SCOPES,
+    build_personal_calendar_service, build_service, load_credentials,
+    load_personal_calendar_credentials,
+)
 
 
 class GoogleAuthTests(unittest.TestCase):
@@ -20,6 +24,11 @@ class GoogleAuthTests(unittest.TestCase):
 
     def test_config_uses_the_authorized_user_credential_file(self):
         self.assertTrue(config.GOOGLE_OAUTH_CREDENTIALS_FILE.endswith(".oauth2.sam@streetcredpr.com.json"))
+
+    def test_personal_config_uses_distinct_oauth_files(self):
+        self.assertTrue(config.SHEILA_PERSONAL_GOOGLE_OAUTH_CLIENT_FILE.endswith("credentials_personal.json"))
+        self.assertTrue(config.SHEILA_PERSONAL_GOOGLE_OAUTH_CREDENTIALS_FILE.endswith(".oauth2.personal-calendar.json"))
+        self.assertNotEqual(config.SHEILA_PERSONAL_GOOGLE_OAUTH_CREDENTIALS_FILE, config.GOOGLE_OAUTH_CREDENTIALS_FILE)
 
     @patch("google.oauth2.credentials.Credentials.from_authorized_user_file")
     def test_credential_file_loads(self, loader):
@@ -61,6 +70,26 @@ class GoogleAuthTests(unittest.TestCase):
             with tempfile.NamedTemporaryFile() as credential_file:
                 self.assertIs(load_credentials(credential_file.name), credentials)
         credentials.refresh.assert_called_once()
+
+    @patch("google.oauth2.credentials.Credentials.from_authorized_user_file")
+    def test_personal_credentials_load_from_personal_path_with_write_scope(self, loader):
+        credentials = MagicMock(valid=True)
+        loader.return_value = credentials
+        with tempfile.NamedTemporaryFile() as credential_file:
+            self.assertIs(load_personal_calendar_credentials(credential_file.name), credentials)
+        loader.assert_called_once_with(credential_file.name, PERSONAL_CALENDAR_SCOPES)
+
+    def test_personal_credentials_cannot_use_work_credential_file(self):
+        with patch.object(config, "SHEILA_PERSONAL_GOOGLE_OAUTH_CREDENTIALS_FILE", config.GOOGLE_OAUTH_CREDENTIALS_FILE):
+            with self.assertRaises(GoogleAuthError):
+                load_personal_calendar_credentials()
+
+    @patch("integrations.google_auth._build_service")
+    def test_work_and_personal_service_builders_use_distinct_loaders(self, builder):
+        build_service("calendar", "v3")
+        self.assertIs(builder.call_args.args[2], load_credentials)
+        build_personal_calendar_service()
+        self.assertIs(builder.call_args.args[2], load_personal_calendar_credentials)
 
 
 class GmailTests(unittest.TestCase):
@@ -115,6 +144,26 @@ class CalendarTests(unittest.TestCase):
         event = calendar.normalize_event({"start": {"date": "2026-08-24"}, "end": {"date": "2026-08-25"}})
         self.assertEqual(event["start"], "2026-08-24")
         self.assertEqual(event["end"], "2026-08-25")
+
+    @patch("integrations.calendar.build_personal_calendar_service")
+    def test_personal_adapter_uses_personal_service(self, personal_service):
+        service = MagicMock()
+        service.events().list().execute.return_value = {"items": []}
+        personal_service.return_value = service
+        adapter = calendar.GoogleCalendarAdapter("woodysc7@gmail.com")
+        result = adapter.list_events(datetime(2026, 8, 24, tzinfo=timezone.utc), datetime(2026, 8, 25, tzinfo=timezone.utc))
+        self.assertTrue(result.success)
+        personal_service.assert_called_once_with("calendar", "v3")
+
+    @patch("integrations.calendar.build_personal_calendar_service")
+    @patch("integrations.calendar.build_service")
+    def test_work_helper_uses_work_service_not_personal_service(self, work_service, personal_service):
+        service = MagicMock()
+        service.events().list().execute.return_value = {"items": []}
+        work_service.return_value = service
+        calendar.get_events(datetime(2026, 8, 24, tzinfo=timezone.utc), datetime(2026, 8, 25, tzinfo=timezone.utc))
+        work_service.assert_called_once_with("calendar", "v3")
+        personal_service.assert_not_called()
 
 
 class DriveTests(unittest.TestCase):

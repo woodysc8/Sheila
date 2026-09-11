@@ -154,11 +154,26 @@ def get_sheila_timezone() -> ZoneInfo:
     except (KeyError, ValueError):
         return ZoneInfo("America/New_York")
 
-# Authorized-user OAuth credentials used only by Sheila's read-only Google
-# integrations.  Keep the file local; it is intentionally ignored by git.
+# Authorized-user OAuth credentials used by Sheila's Google integrations.
+# Keep the file local; it is intentionally ignored by git.
 GOOGLE_OAUTH_CREDENTIALS_FILE = os.environ.get(
     "GOOGLE_OAUTH_CREDENTIALS_FILE",
     os.path.join(os.path.dirname(__file__), ".oauth2.sam@streetcredpr.com.json"),
+).strip().strip('"').strip("'")
+
+# Deliberately explicit: never silently use the work account's "primary".
+SHEILA_PERSONAL_GOOGLE_CALENDAR_ID = os.environ.get(
+    "SHEILA_PERSONAL_GOOGLE_CALENDAR_ID", ""
+).strip()
+# Personal Calendar has a distinct Google OAuth client and authorized-user
+# token. These must never default to the StreetCred/work credential files.
+SHEILA_PERSONAL_GOOGLE_OAUTH_CLIENT_FILE = os.environ.get(
+    "SHEILA_PERSONAL_GOOGLE_OAUTH_CLIENT_FILE",
+    os.path.join(os.path.dirname(__file__), "credentials_personal.json"),
+).strip().strip('"').strip("'")
+SHEILA_PERSONAL_GOOGLE_OAUTH_CREDENTIALS_FILE = os.environ.get(
+    "SHEILA_PERSONAL_GOOGLE_OAUTH_CREDENTIALS_FILE",
+    os.path.join(os.path.dirname(__file__), ".oauth2.personal-calendar.json"),
 ).strip().strip('"').strip("'")
 
 # ---------------------------------------------------------------------------
