@@ -556,9 +556,21 @@ def _add_months(value: date, months: int) -> date:
 def _weekend_events_response(text: str, now: datetime) -> str:
     """Return a concise, deduplicated Google Calendar weekend view."""
     months = re.search(r"\bnext\s+(?:(\d+)|(?:one|a)|two)\s+months?\b", text, re.IGNORECASE)
-    count = int(months.group(1)) if months and months.group(1) else (2 if months else 1)
-    start = datetime.combine(now.date(), time.min, tzinfo=_zone())
-    end = datetime.combine(_add_months(now.date(), count), time.min, tzinfo=_zone())
+    if months:
+        count = int(months.group(1)) if months.group(1) else 2
+        start = datetime.combine(now.date(), time.min, tzinfo=_zone())
+        end = datetime.combine(_add_months(now.date(), count), time.min, tzinfo=_zone())
+        heading = (f"Weekend events through {(end - timedelta(days=1)).date():%B} "
+                   f"{(end - timedelta(days=1)).day} "
+                   f"(interpreting ‘next {count} months’ from today):")
+    else:
+        days_until_saturday = (5 - now.weekday()) % 7
+        weekend_start = now.date() + timedelta(days=days_until_saturday)
+        start = datetime.combine(weekend_start, time.min, tzinfo=_zone())
+        end = start + timedelta(days=2)
+        heading = (f"This weekend ({weekend_start:%A, %B} {weekend_start.day} "
+                   f"through {(weekend_start + timedelta(days=1)):%A, %B} "
+                   f"{(weekend_start + timedelta(days=1)).day}):")
     seen: set[tuple[str, date]] = set()
     grouped: dict[date, list[dict[str, object]]] = {}
     for event in get_personal_calendar_events(start, end):
@@ -581,8 +593,8 @@ def _weekend_events_response(text: str, now: datetime) -> str:
                 grouped.setdefault(cursor, []).append(event)
             cursor += timedelta(days=1)
     if not grouped:
-        return f"No personal Google Calendar events fall on weekends through {end.date():%B} {end.date().day}."
-    lines = [f"Weekend events through {end.date():%B} {end.date().day} (interpreting ‘next {count} months’ from today):"]
+        return "No personal Google Calendar events fall during that weekend range."
+    lines = [heading]
     for event_date in sorted(grouped):
         lines.append(f"{event_date:%A, %B} {event_date.day}:")
         for event in grouped[event_date]:
@@ -817,7 +829,7 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
         if len(matches) > 1:
             return "Which matching personal-calendar event do you mean?"
     if _natural_lookup(text):
-        if "weekend" in lowered and re.search(r"\bnext\s+(?:(?:\d+)|one|two|a)\s+months?\b", lowered):
+        if "weekend" in lowered:
             return _weekend_events_response(text, current)
         named = re.search(r"\bwhen\s+(?:is|am i going to)\s+(.+?)(?:\?|$)", text, re.IGNORECASE)
         if named:

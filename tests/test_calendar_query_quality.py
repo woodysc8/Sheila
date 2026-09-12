@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 from agents.router import route_request
+from agents import workflow
 import personal_calendar
 import sheila_handler
 import sheila_tasks
@@ -13,6 +14,34 @@ NOW = datetime(2026, 9, 12, 12, tzinfo=ZoneInfo("America/New_York"))
 
 
 class CalendarQueryQualityTests(unittest.TestCase):
+    def test_this_weekend_is_bounded_grouped_and_deduplicated_without_work_merge(self):
+        events = [
+            {"id": "sat", "title": "Saturday hike", "start": "2026-09-12T09:00:00-04:00", "end": "2026-09-12T10:00:00-04:00", "all_day": False},
+            {"id": "sat", "title": "Saturday hike", "start": "2026-09-12T09:00:00-04:00", "end": "2026-09-12T10:00:00-04:00", "all_day": False},
+            {"id": "sun", "title": "Sunday brunch", "start": "2026-09-13T11:00:00-04:00", "end": "2026-09-13T12:00:00-04:00", "all_day": False},
+            {"id": "weekday", "title": "Monday meeting", "start": "2026-09-14T09:00:00-04:00", "end": "2026-09-14T10:00:00-04:00", "all_day": False},
+        ]
+        with patch.object(personal_calendar, "get_personal_calendar_events", return_value=events) as personal_read, \
+             patch("agents.workflow.calendar.get_events") as work_read:
+            reply = personal_calendar.handle_personal_calendar_request("What am I doing this weekend?", NOW)
+            result = workflow.google_data_node({
+                "route": route_request("What am I doing this weekend?").to_dict(),
+                "user_text": "What am I doing this weekend?",
+            })
+
+        self.assertIn("Saturday, September 12", reply)
+        self.assertIn("Sunday, September 13", reply)
+        self.assertEqual(reply.count("Saturday hike"), 1)
+        self.assertNotIn("Monday meeting", reply)
+        self.assertEqual(personal_read.call_count, 2)
+        work_read.assert_not_called()
+        self.assertIn("personal_calendar_response", result)
+
+    def test_calendar_range_treats_weekend_as_two_days_not_a_week(self):
+        start, end = workflow._calendar_range("What am I doing this weekend?", NOW)
+        self.assertEqual(start, datetime(2026, 9, 12, tzinfo=ZoneInfo("America/New_York")))
+        self.assertEqual(end, datetime(2026, 9, 14, tzinfo=ZoneInfo("America/New_York")))
+
     def test_next_two_month_weekends_filters_deduplicates_sorts_and_groups(self):
         events = [
             {"id": "weekday", "title": "Workday", "start": "2026-09-14T09:00:00-04:00", "end": "2026-09-14T10:00:00-04:00", "all_day": False},

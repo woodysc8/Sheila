@@ -125,6 +125,10 @@ def _calendar_range(user_text: str, now: datetime | None = None) -> tuple[dateti
     text = user_text.lower()
     if "today" in text and "tomorrow" in text:
         return start, start + timedelta(days=2)
+    if "weekend" in text:
+        days_until_saturday = (5 - start.weekday()) % 7
+        weekend_start = start + timedelta(days=days_until_saturday)
+        return weekend_start, weekend_start + timedelta(days=2)
     if "tomorrow" in text:
         start += timedelta(days=1)
     else:
@@ -303,7 +307,7 @@ def google_data_node(state: SheilaWorkflowState) -> dict[str, str]:
         if capability == "personal_calendar":
             response = personal_calendar.handle_personal_calendar_request(user_text)
             if (_is_natural_calendar_lookup(user_text) and "personal calendar" not in user_text.lower()
-                    and not ("weekend" in user_text.lower() and "month" in user_text.lower())):
+                    and "weekend" not in user_text.lower()):
                 start, end = _calendar_range(user_text)
                 try:
                     work = calendar.get_events(start, end, limit=20)
