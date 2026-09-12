@@ -17,6 +17,14 @@ from integrations.calendar import GoogleCalendarAdapter
 # a confirmed mutation; Google is still consulted before any follow-up action.
 _last_confirmed_event_id: str | None = None
 
+# These are deliberately narrow, context-only turns. They never contain an
+# event title, so they are safe to resolve only through the ephemeral Google
+# event ID established by the immediately preceding calendar interaction.
+_EVENT_DETAIL_FOLLOWUP_PATTERN = re.compile(
+    r"^\s*(?:when|what\s+time|what\s+day|where|what(?:'s|\s+is)\s+the\s+location|who\s+is\s+(?:it|this)\s+with)\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+
 
 def _log(operation: str, **details: object) -> None:
     payload = {"operation": operation, "pid": os.getpid(), "db_path": os.path.abspath(config.DB_PATH), **details}
@@ -86,7 +94,10 @@ def delete_personal_calendar_event(event_id: int | str) -> bool:
         if result.success:
             _clear_confirmed_event(str(event_id))
         return result.success
-    return calendar_store.delete_event(event_id)
+    deleted = calendar_store.delete_event(event_id)
+    if deleted:
+        _clear_confirmed_event(str(event_id))
+    return deleted
 
 
 def _zone() -> ZoneInfo:
@@ -104,6 +115,12 @@ def _clear_confirmed_event(event_id: str) -> None:
     global _last_confirmed_event_id
     if _last_confirmed_event_id == event_id:
         _last_confirmed_event_id = None
+
+
+def _clear_active_event_reference() -> None:
+    """Discard an ambiguous or no-longer-valid conversational event reference."""
+    global _last_confirmed_event_id
+    _last_confirmed_event_id = None
 
 
 _WEEKDAYS = {name: index for index, name in enumerate(
@@ -341,6 +358,39 @@ def _confirmed_followup_event() -> dict[str, object] | None:
     return result.value
 
 
+def is_event_detail_followup(user_text: str) -> bool:
+    """Whether text is a terse request about the active calendar event."""
+    return _EVENT_DETAIL_FOLLOWUP_PATTERN.fullmatch(user_text.strip()) is not None
+
+
+def _event_followup_detail_response(user_text: str) -> str:
+    """Answer a terse event question from a fresh authoritative Google read."""
+    event = _confirmed_followup_event()
+    if event is None:
+        return "Which calendar event do you mean?"
+    title = str(event.get("title") or "That event")
+    text = user_text.strip().lower().rstrip("?.!")
+    all_day = bool(event.get("all_day"))
+    try:
+        start = datetime.fromisoformat(str(event["start"])).astimezone(_zone())
+    except (KeyError, ValueError):
+        return "I couldn't read that event's timing from your personal Google Calendar."
+    day = start.strftime("%A, %B %d, %Y").replace(" 0", " ")
+    if text == "what day":
+        return f"{title} is on {day}."
+    if text in {"where", "what's the location", "what is the location"}:
+        location = str(event.get("location") or "").strip()
+        return f"{title} is at {location}." if location else f"I don't have a location for {title} on your personal Google Calendar."
+    if text.startswith("who is"):
+        description = str(event.get("description") or "").strip()
+        return f"The event details say: {description}" if description else f"I don't have attendee information for {title} on your personal Google Calendar."
+    if all_day:
+        return f"{title} is an all-day event on {day}."
+    if text == "what time":
+        return f"{title} starts at {_display_time(start)} on {day}."
+    return f"{title} is on {day} at {_display_time(start)}."
+
+
 def _display_time(value: datetime) -> str:
     return value.strftime("%I:%M %p").lstrip("0")
 
@@ -529,8 +579,16 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
     if re.match(r"^\s*(?:is|are)\b", lowered) and re.search(r"\b(?:on|in)\s+(?:my\s+)?(?:personal\s+)?calendar\b", lowered):
         subject, date_hint = _command_subject(text, current)
         matches = _find_events(subject, current, partial=True, date_hint=date_hint) if subject else []
-        return ("It is currently on your personal Google Calendar."
-                if matches else "It is not currently on your personal Google Calendar.")
+        if len(matches) == 1:
+            _remember_confirmed_event(matches[0])
+            return "It is currently on your personal Google Calendar."
+        if len(matches) > 1:
+            _clear_active_event_reference()
+            return "I found more than one matching personal-calendar event. Which one do you mean?"
+        _clear_active_event_reference()
+        return "It is not currently on your personal Google Calendar."
+    if is_event_detail_followup(text):
+        return _event_followup_detail_response(text)
     if re.search(r"\b(?:cancel|delete|remove)\b|\b(?:isn't|is not|aren't|are not)\b.*\b(?:anymore|off|cancel)|\b(?:is|are)\b.*\b(?:off|cancelled|canceled|anymore)", lowered):
         is_followup = bool(re.search(r"\b(?:that|it|this)\s+(?:event|one)\b|^\s*(?:cancel|delete|remove)\s+(?:that|it|this)\b", lowered))
         confirmed = _confirmed_followup_event() if is_followup else None

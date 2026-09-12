@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from integrations.calendar import CalendarResult
 import personal_calendar
+import sheila_handler
 from agents.router import route_request
 
 
@@ -14,14 +15,14 @@ NOW = datetime(2026, 9, 11, 12, tzinfo=ZoneInfo("America/New_York"))
 class FakeGoogleCalendarAdapter:
     """In-memory Google API double; no local calendar store is involved."""
     events: dict[str, dict[str, object]] = {}
-    creates = updates = deletes = 0
+    creates = updates = deletes = finds = 0
 
     def __init__(self, *_args):
         pass
 
     @classmethod
     def reset(cls):
-        cls.events, cls.creates, cls.updates, cls.deletes = {}, 0, 0, 0
+        cls.events, cls.creates, cls.updates, cls.deletes, cls.finds = {}, 0, 0, 0, 0
 
     def list_events(self, start, end, limit=20):
         def begins(event):
@@ -31,6 +32,7 @@ class FakeGoogleCalendarAdapter:
         return CalendarResult(True, [event for event in self.events.values() if begins(event)][:limit])
 
     def find_event(self, event_id):
+        self.__class__.finds += 1
         event = self.events.get(event_id)
         return CalendarResult(True, event) if event else CalendarResult(False, error="not found")
 
@@ -93,6 +95,36 @@ class PersonalGoogleConversationTests(unittest.TestCase):
         self.assertIn("currently", personal_calendar.handle_personal_calendar_request("Is Zach Bryan at Gillette Stadium on October 2nd on my calendar?", NOW))
         self.assertIn("Deleted", personal_calendar.handle_personal_calendar_request("Delete Zach Bryan tomorrow", NOW.replace(month=10, day=1)))
         self.assertEqual(FakeGoogleCalendarAdapter.events, {})
+
+    def test_active_event_detail_followups_re_read_google_and_clear_after_delete(self):
+        personal_calendar.handle_personal_calendar_request("Add Zach Bryan at Gillette Stadium on October 2nd", NOW)
+        self.assertIn("currently", personal_calendar.handle_personal_calendar_request(
+            "Is Zach Bryan on my calendar?", NOW
+        ))
+        self.assertIn("October 2", personal_calendar.handle_personal_calendar_request("When?", NOW))
+        self.assertIn("all-day", personal_calendar.handle_personal_calendar_request("What time?", NOW))
+        self.assertIn("Friday", personal_calendar.handle_personal_calendar_request("What day?", NOW))
+        self.assertGreaterEqual(FakeGoogleCalendarAdapter.finds, 3)
+        self.assertIn("Deleted", personal_calendar.handle_personal_calendar_request("Remove that event", NOW))
+        self.assertEqual(personal_calendar.handle_personal_calendar_request("When?", NOW), "Which calendar event do you mean?")
+
+    def test_multiple_existence_matches_and_missing_active_reference_require_clarification(self):
+        personal_calendar.handle_personal_calendar_request("Add Zach Bryan on October 2nd", NOW)
+        personal_calendar.handle_personal_calendar_request("Add Zach Bryan on October 3rd", NOW)
+        reply = personal_calendar.handle_personal_calendar_request("Is Zach Bryan on my calendar?", NOW)
+        self.assertIn("more than one", reply)
+        self.assertEqual(personal_calendar.handle_personal_calendar_request("When?", NOW), "Which calendar event do you mean?")
+
+    def test_handler_detail_followup_does_not_read_or_write_sam2(self):
+        personal_calendar.handle_personal_calendar_request("Add Zach Bryan on October 2nd", NOW)
+        personal_calendar.handle_personal_calendar_request("Is Zach Bryan on my calendar?", NOW)
+        with patch.object(sheila_handler.memory, "recall") as recall, \
+             patch.object(sheila_handler.memory, "remember") as remember, \
+             patch.object(sheila_handler.memory, "log_exchange"):
+            reply = sheila_handler.process_message("When?")
+        self.assertIn("October 2", reply)
+        recall.assert_not_called()
+        remember.assert_not_called()
 
     def test_batch_all_day_birthday_and_idempotency_report_actual_google_results(self):
         batch = """October 2: Zach Bryan at Gillette Stadium.

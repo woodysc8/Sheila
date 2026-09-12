@@ -167,6 +167,13 @@ def _center_calendar_reply(result: object) -> str:
 
 def process_message(user_text: str) -> str:
     """Process and log one user message through Sheila's existing workflow."""
+    # Terse calendar details (for example, "When?") are resolved from the
+    # adapter's ephemeral event ID and re-read from Google Calendar. They are
+    # neither durable memory nor a reason to invoke Center.
+    if personal_calendar.is_event_detail_followup(user_text):
+        reply = personal_calendar.handle_personal_calendar_request(user_text)
+        memory.log_exchange(user_text, reply, important=False)
+        return reply
     prior_text = memory.get_latest_user_text() if CALENDAR_FOLLOWUP_PATTERN.search(user_text) else None
     effective_text = f"{prior_text}\n{user_text}" if prior_text else user_text
     lowered = effective_text.lower()
