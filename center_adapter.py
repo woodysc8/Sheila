@@ -30,7 +30,15 @@ class CenterUnavailableError(CenterError):
     """Raised when Center cannot accept or execute a submitted task."""
 
 
-_CENTER_MODULE_NAMES = ("config", "intake", "classifier", "delegation", "specialists")
+_CENTER_MODULE_NAMES = (
+    "config",
+    "intake",
+    "classifier",
+    "delegation",
+    "execution",
+    "specialists",
+    "capabilities",
+)
 _IMPORT_LOCK = RLock()
 
 
@@ -56,18 +64,21 @@ def _center_import_scope(center_path: Path):
     """Load Center's legacy top-level modules without replacing Sheila's ones."""
     saved_modules = {
         name: module for name, module in sys.modules.items()
-        if name in _CENTER_MODULE_NAMES or name.startswith("specialists.")
+        if (name in _CENTER_MODULE_NAMES or name.startswith("specialists.")
+            or name.startswith("capabilities."))
     }
     original_path = list(sys.path)
     try:
         for name in tuple(sys.modules):
-            if name in _CENTER_MODULE_NAMES or name.startswith("specialists."):
+            if (name in _CENTER_MODULE_NAMES or name.startswith("specialists.")
+                    or name.startswith("capabilities.")):
                 del sys.modules[name]
         sys.path.insert(0, str(center_path))
         yield
     finally:
         for name in tuple(sys.modules):
-            if name in _CENTER_MODULE_NAMES or name.startswith("specialists."):
+            if (name in _CENTER_MODULE_NAMES or name.startswith("specialists.")
+                    or name.startswith("capabilities.")):
                 del sys.modules[name]
         sys.modules.update(saved_modules)
         sys.path[:] = original_path

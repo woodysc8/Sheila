@@ -1,3 +1,4 @@
+from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
 
@@ -64,6 +65,28 @@ class AiNetworkOrchestrationTests(unittest.TestCase):
             reply = sheila_handler.process_message("Check my calendar for tomorrow.")
         self.assertIn("could not complete", reply)
         self.assertNotIn("added", reply.lower())
+
+    def test_calendar_read_vertical_slice_uses_real_center_with_injected_sheila_reader(self):
+        """Exercise Sheila -> Center -> injected reader without Google access."""
+        center_path = Path(__file__).resolve().parents[2] / "Center"
+        reader = Mock(return_value=[{"id": "google-1", "title": "Dentist"}])
+        with patch.object(sheila_handler.personal_calendar, "get_personal_calendar_events", reader), \
+             patch.object(orchestration.center_adapter.config, "SHEILA_CENTER_PATH", str(center_path)), \
+             patch.object(sheila_handler.memory, "log_exchange"):
+            reply = sheila_handler.process_message("Check my calendar for tomorrow.")
+
+        self.assertIn("Dentist", reply)
+        reader.assert_called_once()
+
+    def test_center_empty_calendar_result_is_formatted_naturally(self):
+        with patch.object(orchestration.center_adapter, "submit_execution_task", return_value={
+            "status": "succeeded",
+            "authoritative_source": "google_calendar",
+            "result": {"events": [], "count": 0},
+        }), patch.object(sheila_handler.memory, "log_exchange"):
+            reply = sheila_handler.process_message("Check my calendar for tomorrow.")
+
+        self.assertEqual(reply, "Your Google Calendar is clear tomorrow.")
 
 
 if __name__ == "__main__":
