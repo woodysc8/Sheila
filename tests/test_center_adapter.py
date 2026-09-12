@@ -1,4 +1,5 @@
 import inspect
+from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
 
@@ -7,6 +8,30 @@ import memory
 
 
 class CenterAdapterTests(unittest.TestCase):
+    def test_center_runtime_dependency_is_pinned_and_secret_free(self):
+        requirements = (Path(__file__).resolve().parents[1] /
+                        "requirements-center-runtime.txt").read_text(encoding="utf-8")
+        self.assertIn(
+            "center @ git+https://github.com/woodysc8/Center.git@1d81c89bd3d4a76c674d50d9bb4f79eb05a3cf66",
+            requirements,
+        )
+        self.assertNotIn("@github.com:", requirements)
+        self.assertNotIn("token", requirements.lower())
+
+    def test_runtime_directory_loads_center_handler_and_restores_sheila_imports(self):
+        center_path = Path(__file__).resolve().parents[2] / "Center"
+        original_path = list(__import__("sys").path)
+        original_config = __import__("sys").modules.get("config")
+
+        with patch.object(center_adapter.config, "SHEILA_CENTER_PATH", str(center_path)):
+            self.assertTrue(center_path.is_dir())
+            with center_adapter._center_import_scope(center_path):
+                handler = center_adapter._load_handler()
+                self.assertTrue(callable(handler))
+
+        self.assertEqual(__import__("sys").path, original_path)
+        self.assertIs(__import__("sys").modules.get("config"), original_config)
+
     def test_submits_structured_task_to_center(self):
         handler = Mock(return_value={"status": "done"})
         task = {

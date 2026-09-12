@@ -1,0 +1,3 @@
+# Installed by Render into .center-runtime/, never shared site-packages.
+# The package name and immutable revision match Center's approved release.
+center @ git+https://github.com/woodysc8/Center.git@1d81c89bd3d4a76c674d50d9bb4f79eb05a3cf66
