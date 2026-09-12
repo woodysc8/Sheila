@@ -36,6 +36,13 @@ _AMBIGUOUS_EVENT_ORDINAL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# These are destination entities, not loose keyword expansion.  In
+# particular, ``DR`` is recognized only as a standalone user-query alias and
+# never used as a broad event-text token.
+_TRIP_DESTINATION_ALIASES: tuple[tuple[str, ...], ...] = (
+    ("dominican republic", "santo domingo", "punta cana", "sdq"),
+)
+
 
 def _log(operation: str, **details: object) -> None:
     payload = {"operation": operation, "pid": os.getpid(), "db_path": os.path.abspath(config.DB_PATH), **details}
@@ -59,6 +66,58 @@ def get_personal_calendar_events(start: datetime, end: datetime) -> list[dict[st
             raise calendar_store.CalendarError(result.error or "Personal Google Calendar is unavailable.")
         return result.value
     return calendar_store.list_events(start, end)
+
+
+def _trip_destination_aliases(user_text: str) -> tuple[str, ...] | None:
+    normalized = user_text.lower()
+    for aliases in _TRIP_DESTINATION_ALIASES:
+        if any(re.search(rf"\b{re.escape(alias)}\b", normalized) for alias in aliases):
+            return aliases
+    if re.search(r"\bdr\b", normalized):
+        return _TRIP_DESTINATION_ALIASES[0]
+    return None
+
+
+def find_existing_trip_events(user_text: str, now: datetime | None = None) -> list[dict[str, object]] | None:
+    """Find upcoming personal-calendar events for a recognized destination.
+
+    ``None`` means the request did not name a supported destination entity;
+    an empty list means it did but Google Calendar has no matching event.
+    """
+    aliases = _trip_destination_aliases(user_text)
+    if aliases is None:
+        return None
+    zone = _zone()
+    current = (now or datetime.now(zone)).astimezone(zone)
+    events = get_personal_calendar_events(
+        datetime.combine(current.date(), time.min, tzinfo=zone),
+        datetime.combine(current.date() + timedelta(days=730), time.min, tzinfo=zone),
+    )
+    matches: list[dict[str, object]] = []
+    for event in events:
+        searchable = " ".join(str(event.get(field) or "") for field in ("title", "location", "description")).lower()
+        if any(re.search(rf"\b{re.escape(alias)}\b", searchable) for alias in aliases):
+            matches.append(event)
+    return sorted(matches, key=lambda event: str(event.get("start", "")))
+
+
+def format_existing_trip_events(events: list[dict[str, object]]) -> str:
+    """Present destination matches from Google Calendar without inventing data."""
+    if not events:
+        return "No matching personal Google Calendar trip events found."
+    lines: list[str] = []
+    for event in events:
+        title = str(event.get("title") or "(untitled event)")
+        location = str(event.get("location") or "").strip()
+        try:
+            start = datetime.fromisoformat(str(event["start"])).astimezone(_zone())
+            timing = (f"{start.strftime('%A, %B %d, %Y').replace(' 0', ' ')} (all-day)"
+                      if event.get("all_day") else
+                      f"{start.strftime('%A, %B %d, %Y').replace(' 0', ' ')} at {_display_time(start)}")
+        except (KeyError, ValueError):
+            timing = str(event.get("start") or "unknown time")
+        lines.append(f"- {title} — {timing}" + (f" — {location}" if location else ""))
+    return "Personal Google Calendar:\n" + "\n".join(lines)
 
 
 def create_personal_calendar_event(title: str, start: datetime, end: datetime,

@@ -34,7 +34,8 @@ TRAVEL_OPERATION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 EXISTING_TRAVEL_INFO_PATTERN = re.compile(
-    r"\b(?:do\s+i\s+have|when\s+am\s+i\s+going|is\s+there|what\s+(?:flight|trip))\b.*\b(?:flight|trip|travel|dominican|destination)\b",
+    r"\b(?:do\s+i\s+have|when\s+am\s+i\s+going|is\s+there|what\s+(?:flight|trip)|when\s+is\s+my\s+trip|what\s+(?:are|do)\s+my\s+plans|what\s+do\s+i\s+have\s+planned)\b"
+    r".*\b(?:flight|trip|travel|dominican\s+republic|dr|santo\s+domingo|punta\s+cana|sdq)\b",
     re.IGNORECASE,
 )
 RESEARCH_TERMS = (
