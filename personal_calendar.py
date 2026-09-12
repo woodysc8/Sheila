@@ -16,12 +16,23 @@ from integrations.calendar import GoogleCalendarAdapter
 # Ephemeral conversational reference only.  It stores a Google event ID after
 # a confirmed mutation; Google is still consulted before any follow-up action.
 _last_confirmed_event_id: str | None = None
+# Candidate IDs are retained only while Sheila is clarifying an ambiguous
+# lookup. Event bodies are never retained; every answer re-reads Google.
+_ambiguous_event_ids: tuple[str, ...] = ()
 
 # These are deliberately narrow, context-only turns. They never contain an
 # event title, so they are safe to resolve only through the ephemeral Google
 # event ID established by the immediately preceding calendar interaction.
 _EVENT_DETAIL_FOLLOWUP_PATTERN = re.compile(
     r"^\s*(?:when|what\s+time|what\s+day|where|what(?:'s|\s+is)\s+the\s+location|who\s+is\s+(?:it|this)\s+with)\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+_AMBIGUOUS_EVENT_LIST_PATTERN = re.compile(
+    r"^\s*(?:what\s+events|which\s+ones|show\s+me\s+(?:them|the\s+events)|what\s+are\s+they)\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+_AMBIGUOUS_EVENT_ORDINAL_PATTERN = re.compile(
+    r"^\s*(?:the\s+)?(?P<ordinal>first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th)(?:\s+(?:one|event))?\s*[?.!]*\s*$",
     re.IGNORECASE,
 )
 
@@ -105,10 +116,11 @@ def _zone() -> ZoneInfo:
 
 
 def _remember_confirmed_event(event: dict[str, object]) -> None:
-    global _last_confirmed_event_id
+    global _last_confirmed_event_id, _ambiguous_event_ids
     event_id = str(event.get("id", ""))
     if event_id:
         _last_confirmed_event_id = event_id
+        _ambiguous_event_ids = ()
 
 
 def _clear_confirmed_event(event_id: str) -> None:
@@ -121,6 +133,27 @@ def _clear_active_event_reference() -> None:
     """Discard an ambiguous or no-longer-valid conversational event reference."""
     global _last_confirmed_event_id
     _last_confirmed_event_id = None
+
+
+def _remember_ambiguous_events(events: list[dict[str, object]]) -> None:
+    """Keep only candidate Google IDs while the user chooses one."""
+    global _last_confirmed_event_id, _ambiguous_event_ids
+    _last_confirmed_event_id = None
+    _ambiguous_event_ids = tuple(str(event["id"]) for event in events if event.get("id"))
+
+
+def _clear_ambiguous_event_reference() -> None:
+    global _ambiguous_event_ids
+    _ambiguous_event_ids = ()
+
+
+def has_ambiguous_event_reference() -> bool:
+    return bool(_ambiguous_event_ids)
+
+
+def clear_ambiguous_event_reference() -> None:
+    """Clear process-local ambiguity context when the topic changes."""
+    _clear_ambiguous_event_reference()
 
 
 _WEEKDAYS = {name: index for index, name in enumerate(
@@ -358,6 +391,66 @@ def _confirmed_followup_event() -> dict[str, object] | None:
     return result.value
 
 
+def is_ambiguous_event_followup(user_text: str) -> bool:
+    """Whether text asks to inspect or select current ambiguity candidates."""
+    text = user_text.strip()
+    return (_AMBIGUOUS_EVENT_LIST_PATTERN.fullmatch(text) is not None or
+            _AMBIGUOUS_EVENT_ORDINAL_PATTERN.fullmatch(text) is not None or
+            bool(re.search(r"\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(?:st|nd|rd|th)?\s+(?:one|event)\b", text, re.IGNORECASE)))
+
+
+def _ambiguous_candidates() -> list[dict[str, object]]:
+    """Re-read current candidates and discard IDs no longer in Google."""
+    global _ambiguous_event_ids
+    adapter = _google_calendar()
+    if not adapter or not _ambiguous_event_ids:
+        return []
+    events: list[dict[str, object]] = []
+    for event_id in _ambiguous_event_ids:
+        result = adapter.find_event(event_id)
+        _log("google_find", success=result.success)
+        if result.success and isinstance(result.value, dict):
+            events.append(result.value)
+    _ambiguous_event_ids = tuple(str(event["id"]) for event in events if event.get("id"))
+    return events
+
+
+def _candidate_line(event: dict[str, object]) -> str:
+    title = str(event.get("title") or "(untitled event)")
+    try:
+        start = datetime.fromisoformat(str(event["start"])).astimezone(_zone())
+        date_text = start.strftime("%B %d, %Y").replace(" 0", " ")
+        timing = "all-day" if event.get("all_day") else _display_time(start)
+    except (KeyError, ValueError):
+        date_text, timing = "unknown date", "unknown time"
+    location = str(event.get("location") or "").strip()
+    return f"- {title} — {date_text} — {timing}" + (f" — {location}" if location else "")
+
+
+def _ambiguous_event_response(user_text: str, now: datetime) -> str:
+    events = _ambiguous_candidates()
+    if not events:
+        _clear_ambiguous_event_reference()
+        return "Which calendar event do you mean?"
+    text = user_text.strip()
+    if _AMBIGUOUS_EVENT_LIST_PATTERN.fullmatch(text):
+        return f"There are {len(events)} matching events:\n\n" + "\n".join(_candidate_line(event) for event in events) + "\n\nWhich one do you mean?"
+    ordinal = _AMBIGUOUS_EVENT_ORDINAL_PATTERN.fullmatch(text)
+    if ordinal:
+        positions = {"first": 0, "1st": 0, "second": 1, "2nd": 1, "third": 2, "3rd": 2, "fourth": 3, "4th": 3, "fifth": 4, "5th": 4}
+        position = positions[ordinal.group("ordinal").lower()]
+        if position < len(events):
+            _remember_confirmed_event(events[position])
+            return f"Selected {_candidate_line(events[position])[2:]}"
+        return f"There are only {len(events)} matching events. Which one do you mean?"
+    date_hint = _date_from_text(text, now)
+    matching = [event for event in events if date_hint and str(event.get("start", ""))[:10] == date_hint.isoformat()]
+    if len(matching) == 1:
+        _remember_confirmed_event(matching[0])
+        return f"Selected {_candidate_line(matching[0])[2:]}"
+    return "I need a more specific event selection."
+
+
 def is_event_detail_followup(user_text: str) -> bool:
     """Whether text is a terse request about the active calendar event."""
     return _EVENT_DETAIL_FOLLOWUP_PATTERN.fullmatch(user_text.strip()) is not None
@@ -583,12 +676,19 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
             _remember_confirmed_event(matches[0])
             return "It is currently on your personal Google Calendar."
         if len(matches) > 1:
-            _clear_active_event_reference()
-            return "I found more than one matching personal-calendar event. Which one do you mean?"
+            _remember_ambiguous_events(matches)
+            return (f"There are {len(matches)} matching events:\n\n" +
+                    "\n".join(_candidate_line(event) for event in matches) +
+                    "\n\nWhich one do you mean?")
         _clear_active_event_reference()
+        _clear_ambiguous_event_reference()
         return "It is not currently on your personal Google Calendar."
+    if is_ambiguous_event_followup(text):
+        return _ambiguous_event_response(text, current)
     if is_event_detail_followup(text):
         return _event_followup_detail_response(text)
+    if has_ambiguous_event_reference():
+        _clear_ambiguous_event_reference()
     if re.search(r"\b(?:cancel|delete|remove)\b|\b(?:isn't|is not|aren't|are not)\b.*\b(?:anymore|off|cancel)|\b(?:is|are)\b.*\b(?:off|cancelled|canceled|anymore)", lowered):
         is_followup = bool(re.search(r"\b(?:that|it|this)\s+(?:event|one)\b|^\s*(?:cancel|delete|remove)\s+(?:that|it|this)\b", lowered))
         confirmed = _confirmed_followup_event() if is_followup else None

@@ -67,6 +67,7 @@ class PersonalGoogleConversationTests(unittest.TestCase):
     def setUp(self):
         FakeGoogleCalendarAdapter.reset()
         personal_calendar._last_confirmed_event_id = None
+        personal_calendar._ambiguous_event_ids = ()
         self.config = patch.object(personal_calendar.config, "SHEILA_PERSONAL_GOOGLE_CALENDAR_ID", "woodysc7@gmail.com")
         self.adapter = patch.object(personal_calendar, "GoogleCalendarAdapter", FakeGoogleCalendarAdapter)
         self.config.start()
@@ -108,23 +109,52 @@ class PersonalGoogleConversationTests(unittest.TestCase):
         self.assertIn("Deleted", personal_calendar.handle_personal_calendar_request("Remove that event", NOW))
         self.assertEqual(personal_calendar.handle_personal_calendar_request("When?", NOW), "Which calendar event do you mean?")
 
-    def test_multiple_existence_matches_and_missing_active_reference_require_clarification(self):
+    def test_ambiguous_candidates_can_be_listed_selected_and_deleted(self):
         personal_calendar.handle_personal_calendar_request("Add Zach Bryan on October 2nd", NOW)
         personal_calendar.handle_personal_calendar_request("Add Zach Bryan on October 3rd", NOW)
+        FakeGoogleCalendarAdapter.events["google-1"]["location"] = "Gillette Stadium"
+        FakeGoogleCalendarAdapter.events["google-2"]["location"] = "Other venue"
         reply = personal_calendar.handle_personal_calendar_request("Is Zach Bryan on my calendar?", NOW)
-        self.assertIn("more than one", reply)
+        self.assertIn("There are 2 matching events", reply)
+        self.assertIn("October 2", reply)
+        self.assertIn("Gillette Stadium", reply)
+        for question in ("What events?", "Which ones?", "Show me them", "Show me the events", "What are they?"):
+            self.assertIn("There are 2 matching events", personal_calendar.handle_personal_calendar_request(question, NOW))
+        self.assertIn("Selected", personal_calendar.handle_personal_calendar_request("The first one", NOW))
+        self.assertIn("October 2", personal_calendar.handle_personal_calendar_request("When?", NOW))
+        self.assertIn("Deleted", personal_calendar.handle_personal_calendar_request("Remove that event", NOW))
+        self.assertEqual(set(FakeGoogleCalendarAdapter.events), {"google-2"})
+
+    def test_ambiguous_date_selection_requires_one_candidate_for_that_date(self):
+        personal_calendar.handle_personal_calendar_request("Add Zach Bryan on October 2nd", NOW)
+        personal_calendar.handle_personal_calendar_request("Add Zach Bryan on October 3rd", NOW)
+        personal_calendar.handle_personal_calendar_request("Is Zach Bryan on my calendar?", NOW)
+        self.assertIn("Selected", personal_calendar.handle_personal_calendar_request("The October 3rd one", NOW))
+        self.assertIn("October 3", personal_calendar.handle_personal_calendar_request("When?", NOW))
+
+    def test_missing_ambiguous_reference_requires_clarification(self):
         self.assertEqual(personal_calendar.handle_personal_calendar_request("When?", NOW), "Which calendar event do you mean?")
+        self.assertEqual(personal_calendar.handle_personal_calendar_request("What events?", NOW), "Which calendar event do you mean?")
+
+    def test_new_calendar_topic_clears_ambiguous_candidates(self):
+        personal_calendar.handle_personal_calendar_request("Add Zach Bryan on October 2nd", NOW)
+        personal_calendar.handle_personal_calendar_request("Add Zach Bryan on October 3rd", NOW)
+        personal_calendar.handle_personal_calendar_request("Is Zach Bryan on my calendar?", NOW)
+        personal_calendar.handle_personal_calendar_request("What do I have tomorrow?", NOW)
+        self.assertEqual(personal_calendar.handle_personal_calendar_request("What events?", NOW), "Which calendar event do you mean?")
 
     def test_handler_detail_followup_does_not_read_or_write_sam2(self):
         personal_calendar.handle_personal_calendar_request("Add Zach Bryan on October 2nd", NOW)
         personal_calendar.handle_personal_calendar_request("Is Zach Bryan on my calendar?", NOW)
         with patch.object(sheila_handler.memory, "recall") as recall, \
              patch.object(sheila_handler.memory, "remember") as remember, \
+             patch.object(sheila_handler.orchestration, "execute_with_center") as center, \
              patch.object(sheila_handler.memory, "log_exchange"):
             reply = sheila_handler.process_message("When?")
         self.assertIn("October 2", reply)
         recall.assert_not_called()
         remember.assert_not_called()
+        center.assert_not_called()
 
     def test_batch_all_day_birthday_and_idempotency_report_actual_google_results(self):
         batch = """October 2: Zach Bryan at Gillette Stadium.
