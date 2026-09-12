@@ -16,6 +16,7 @@ env/
 client_secret*.json
 service_account.json
 credentials.json
+credentials_personal.json
 token.json
 *_credentials.json
 .gauth*

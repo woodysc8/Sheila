@@ -81,7 +81,13 @@ class SheilaTaskTests(unittest.TestCase):
         personal_calendar.handle_personal_calendar_request("Nora is coming Friday at 7.", NOW)
         brain = Mock()
         work_events = [{"title": "All Hands Call", "start": "2026-09-11T11:30:00-04:00", "end": "2026-09-11T12:00:00-04:00", "location": ""}]
-        with patch("agents.workflow.calendar.get_events", return_value=work_events):
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return NOW if tz else NOW.replace(tzinfo=None)
+
+        with patch("agents.workflow.calendar.get_events", return_value=work_events), \
+             patch("agents.workflow.datetime", FrozenDateTime):
             result = handle_request("What do I have Friday?", brain)
         self.assertIn("Friday you have All Hands Call at 11:30 AM and Nora is coming at 7 PM.", result["response"])
         self.assertNotIn("[PERSONAL CALENDAR RESULTS]", result["response"])

@@ -1,6 +1,7 @@
 """Sheila-facing personal-calendar functions and deterministic commands."""
 
 from dataclasses import dataclass
+from calendar import monthrange
 from datetime import date, datetime, time, timedelta
 import json
 import os
@@ -267,11 +268,21 @@ def _event_match_tokens(value: object) -> set[str]:
 
 
 def _plan_time(text: str) -> time | None:
+    # A date range such as "October 21-23" is not an evening appointment.
+    # Keep such travel/PTO commitments all-day unless a real clock time is
+    # supplied elsewhere in the statement.
+    if _EXPLICIT_DATE.search(text) and re.search(r"\b(?:to|through|-)\s*\d{1,2}(?:st|nd|rd|th)?\b", text, re.IGNORECASE):
+        if not re.search(r"\b(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)\b", text, re.IGNORECASE):
+            return None
     return _time_from_text(text, default_meridiem="pm")
 
 
 def _natural_lookup(text: str) -> bool:
-    return bool(re.search(r"\b(?:what do I have|what am I doing|what's happening|what is happening|when is|show me my|coming up|what's on my)\b", text, re.IGNORECASE))
+    return bool(re.search(
+        r"\b(?:what do I have|what am I doing|what's happening|what is happening|when is|when am i going to|do i have|show me my|coming up|what's on my)\b",
+        text,
+        re.IGNORECASE,
+    ))
 
 
 def _find_events(title: str, now: datetime, upcoming_only: bool = False, partial: bool = False, exact: bool = False, date_hint: date | None = None) -> list[dict[str, object]]:
@@ -295,7 +306,7 @@ def _find_events(title: str, now: datetime, upcoming_only: bool = False, partial
 def _event_line(event: dict[str, object]) -> str:
     start = str(event["start"]).replace("T", " ")
     end = str(event["end"]).replace("T", " ")
-    return f"- {event['title']}: {start} to {end} ({event['timezone']})"
+    return f"- {event['title']}: {start} to {end} ({event.get('timezone') or 'America/New_York'})"
 
 
 def _log_lookup(events: list[dict[str, object]]) -> None:
@@ -334,6 +345,55 @@ def _display_time(value: datetime) -> str:
     return value.strftime("%I:%M %p").lstrip("0")
 
 
+def _add_months(value: date, months: int) -> date:
+    month = value.month - 1 + months
+    year, month = value.year + month // 12, month % 12 + 1
+    return date(year, month, min(value.day, monthrange(year, month)[1]))
+
+
+def _weekend_events_response(text: str, now: datetime) -> str:
+    """Return a concise, deduplicated Google Calendar weekend view."""
+    months = re.search(r"\bnext\s+(?:(\d+)|(?:one|a)|two)\s+months?\b", text, re.IGNORECASE)
+    count = int(months.group(1)) if months and months.group(1) else (2 if months else 1)
+    start = datetime.combine(now.date(), time.min, tzinfo=_zone())
+    end = datetime.combine(_add_months(now.date(), count), time.min, tzinfo=_zone())
+    seen: set[tuple[str, date]] = set()
+    grouped: dict[date, list[dict[str, object]]] = {}
+    for event in get_personal_calendar_events(start, end):
+        event_id = str(event.get("id") or f"{event.get('title')}|{event.get('start')}|{event.get('end')}")
+        try:
+            event_start = date.fromisoformat(str(event["start"])[:10])
+            event_end = date.fromisoformat(str(event["end"])[:10])
+        except (KeyError, ValueError):
+            continue
+        # Google all-day event ends are exclusive.  Timed events ending at
+        # midnight on a later date also should not occupy that following day.
+        if event_end > event_start and str(event["end"])[11:16] in ("", "00:00"):
+            event_end -= timedelta(days=1)
+        cursor = max(event_start, start.date())
+        final_date = min(event_end, (end - timedelta(days=1)).date())
+        while cursor <= final_date:
+            identity = (event_id, cursor)
+            if cursor.weekday() >= 5 and identity not in seen:
+                seen.add(identity)
+                grouped.setdefault(cursor, []).append(event)
+            cursor += timedelta(days=1)
+    if not grouped:
+        return f"No personal Google Calendar events fall on weekends through {end.date():%B} {end.date().day}."
+    lines = [f"Weekend events through {end.date():%B} {end.date().day} (interpreting ‘next {count} months’ from today):"]
+    for event_date in sorted(grouped):
+        lines.append(f"{event_date:%A, %B} {event_date.day}:")
+        for event in grouped[event_date]:
+            suffix = ""
+            if not bool(event.get("all_day")):
+                try:
+                    suffix = f" at {_display_time(datetime.fromisoformat(str(event['start'])).astimezone(_zone()))}"
+                except ValueError:
+                    pass
+            lines.append(f"- {event.get('title', '(untitled event)')}{suffix}")
+    return "\n".join(lines)
+
+
 def _is_definite_commitment(text: str) -> bool:
     if "?" in text or _has_tentative_language(text) or _has_historical_language(text):
         return False
@@ -349,6 +409,7 @@ def _is_definite_commitment(text: str) -> bool:
 
 def _event_title(statement: str) -> str:
     title = _EXPLICIT_DATE.sub("", statement)
+    title = re.sub(r"^\s*(?:-|to|through)\s*\d{1,2}(?:st|nd|rd|th)?\s*", "", title, flags=re.IGNORECASE)
     title = re.sub(r"\bto\s+(?:the\s+)?\d{1,2}(?:st|nd|rd|th)?\b", "", title, flags=re.IGNORECASE)
     title = re.sub(r"\b(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", "", title, flags=re.IGNORECASE)
     title = re.sub(r"\b(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", "", title, flags=re.IGNORECASE)
@@ -539,9 +600,19 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
         if len(matches) > 1:
             return "Which matching personal-calendar event do you mean?"
     if _natural_lookup(text):
-        named = re.search(r"\bwhen is\s+(.+?)(?:\?|$)", text, re.IGNORECASE)
+        if "weekend" in lowered and re.search(r"\bnext\s+(?:(?:\d+)|one|two|a)\s+months?\b", lowered):
+            return _weekend_events_response(text, current)
+        named = re.search(r"\bwhen\s+(?:is|am i going to)\s+(.+?)(?:\?|$)", text, re.IGNORECASE)
         if named:
-            matches = _find_events(named.group(1).strip(), current)
+            matches = _find_events(named.group(1).strip(), current, partial=True)
+            _log_lookup(matches)
+            return "No personal-calendar events found." if not matches else "Personal calendar:\n" + "\n".join(_event_line(event) for event in matches)
+        # A leading "Do I have ..." is an existence query.  Do not mistake
+        # "What do I have tomorrow?" for one and discard its date range.
+        existing = re.search(r"^\s*do\s+i\s+have\s+(?:an?\s+)?(.+?)(?:\?|$)", text, re.IGNORECASE)
+        if existing:
+            subject, date_hint = _command_subject(existing.group(1), current)
+            matches = _find_events(subject, current, partial=True, date_hint=date_hint) if subject else []
             _log_lookup(matches)
             return "No personal-calendar events found." if not matches else "Personal calendar:\n" + "\n".join(_event_line(event) for event in matches)
         if "tomorrow" in lowered:
@@ -563,18 +634,36 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
             events = get_personal_calendar_events(start, start + timedelta(days=30))
         _log_lookup(events)
         return "No personal-calendar events found." if not events else "Personal calendar:\n" + "\n".join(_event_line(event) for event in events)
-    committed = _create_definite_event_candidates(text, current)
-    if committed is not None:
-        return committed
+    # Treat calendar wording as command scaffolding only when it names the
+    # user's target calendar.  A title such as "Sheila Calendar Test" must
+    # not turn the entire utterance into a title-bearing command.
+    explicit_create = bool(re.search(
+        r"\b(?:to\s+)?(?:my\s+|personal\s+)(?:google\s+)?calendar\b|\b(?:add|schedule|put|create|book)\s+to\s+calendar\b",
+        lowered,
+    ))
+    if not explicit_create:
+        committed = _create_definite_event_candidates(text, current)
+        if committed is not None:
+            return committed
     if re.search(r"\b(?:add|schedule|put|create|book)\b", lowered):
-        command = re.sub(r"^.*?\b(?:add|schedule|put|create|book)\s+(?:an?\s+)?", "", text, flags=re.IGNORECASE)
+        # Remove a leading action whether or not the user also named the
+        # destination calendar.  A trailing "add to my calendar" remains
+        # available for the cleanup below, while "Add Sam birthday ..." does
+        # not leak the verb into the persisted title.
+        command = re.sub(r"^\s*\b(?:add|schedule|put|create|book)\s+(?:an?\s+)?", "", text, flags=re.IGNORECASE)
         time_range = _time_range_from_text(command)
         start_time = time_range[0] if time_range else _time_from_text(command)
         event_date = _date_from_text(command, current)
         if not event_date:
             return "Please specify the event date before I add it."
         called_title = re.search(r"\bcalled\s+(.+?)(?=\s+\d{1,2}(?::\d{2})?\s*-\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|$)", command, re.IGNORECASE)
+        location_match = re.search(r"\bat\s+(.+?)(?=\s+\b(?:add|schedule|put|create|book)\b\s+(?:to\s+)?(?:my\s+)?(?:personal\s+)?calendar\b|$)", command, re.IGNORECASE)
+        location = location_match.group(1).strip(" ,.") if location_match and not _time_from_text(location_match.group(1)) else ""
         title = called_title.group(1).strip(" ,") if called_title else re.split(r"\b(?:today|tomorrow|on|for)\s+(?:(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:january|february|march|april|may|june|july|august|september|october|november|december)|\d)|at\s+\d", command, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
+        title = _EXPLICIT_DATE.sub("", title)
+        if location:
+            title = re.sub(r"\bat\s+" + re.escape(location) + r"\b", "", title, flags=re.IGNORECASE)
+        title = re.sub(r"\b(?:add|schedule|put|create|book)\s+(?:to\s+)?(?:my\s+)?(?:personal\s+)?calendar\b", "", title, flags=re.IGNORECASE)
         title = re.sub(r"\s+to\s+(?:my\s+)?personal\s+calendar\b", "", title, flags=re.IGNORECASE).strip(" ,")
         title = re.sub(r"\b(?:today|tomorrow)\b", "", title, flags=re.IGNORECASE).strip(" ,")
         title = _EXPLICIT_DATE.sub("", title)
@@ -589,7 +678,7 @@ def handle_personal_calendar_request(user_text: str, now: datetime | None = None
             end += timedelta(days=1)
         if _find_events(title, current, exact=True, date_hint=event_date):
             return f"{title} is already on your personal Google Calendar."
-        event = create_personal_calendar_event(title, start, end, all_day=all_day)
+        event = create_personal_calendar_event(title, start, end, location=location, all_day=all_day)
         if all_day:
             return f"Added {event['title']} to your personal calendar for {start:%Y-%m-%d} as an all-day event."
         return f"Added {event['title']} to your personal calendar for {start:%Y-%m-%d} at {_display_time(start)}."

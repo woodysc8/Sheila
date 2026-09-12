@@ -176,6 +176,21 @@ SHEILA_PERSONAL_GOOGLE_OAUTH_CREDENTIALS_FILE = os.environ.get(
     os.path.join(os.path.dirname(__file__), ".oauth2.personal-calendar.json"),
 ).strip().strip('"').strip("'")
 
+
+def _sync_number(name: str, default: float, minimum: float = 0) -> float:
+    try:
+        return max(minimum, float(os.environ.get(name, str(default))))
+    except ValueError:
+        return default
+
+
+# Bulk work-to-personal Calendar sync protection. Defaults are deliberately
+# conservative: bounded exponential retries plus a four-writes-per-second cap.
+SHEILA_CALENDAR_SYNC_MAX_RETRIES = int(_sync_number("SHEILA_CALENDAR_SYNC_MAX_RETRIES", 6))
+SHEILA_CALENDAR_SYNC_BACKOFF_BASE_SECONDS = _sync_number("SHEILA_CALENDAR_SYNC_BACKOFF_BASE_SECONDS", 1.0)
+SHEILA_CALENDAR_SYNC_BACKOFF_MAX_SECONDS = _sync_number("SHEILA_CALENDAR_SYNC_BACKOFF_MAX_SECONDS", 60.0)
+SHEILA_CALENDAR_SYNC_WRITE_THROTTLE_SECONDS = _sync_number("SHEILA_CALENDAR_SYNC_WRITE_THROTTLE_SECONDS", 0.25)
+
 # ---------------------------------------------------------------------------
 # MEMORY
 # ---------------------------------------------------------------------------

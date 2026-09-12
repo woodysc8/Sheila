@@ -10,6 +10,7 @@ import brain
 import briefing
 import memory
 import personal_calendar
+import orchestration
 from agents.router import route_request
 from agents.workflow import handle_request
 
@@ -24,6 +25,10 @@ EMAIL_QUERY_PATTERN = re.compile(r"(email|emails|mail)(s)?\s+(from|received|i re
 MORNING_PROTOCOL_PATTERN = re.compile(r"(?:good\s+morning|morning)(?:\s+sheila)?[!,.?]*", re.IGNORECASE)
 CALENDAR_FOLLOWUP_PATTERN = re.compile(r"\b(?:add|put|commit|save)\s+(?:all\s+of\s+)?(?:that|this|it)\b.*\bcalendar\b", re.IGNORECASE)
 MIXED_MEMORY_CALENDAR_PATTERN = re.compile(r"\b(?:memory|remember|deep memory)\b.*\bcalendar\b|\bcalendar\b.*\b(?:memory|remember|deep memory)\b", re.IGNORECASE)
+ZACH_MEMORY_CALENDAR_PATTERN = re.compile(r"\bzach\s+bryan\b.*\bremember\b|\bremember\b.*\bzach\s+bryan\b", re.IGNORECASE)
+CALENDAR_MEMORY_LOOKUP_PATTERN = re.compile(r"\b(?:what(?:'s| is) on|what do i have).*(?:calendar).*\b(?:what i said|remind me what)\b", re.IGNORECASE)
+EXISTING_TRAVEL_CONTEXT_PATTERN = re.compile(r"\b(?:when\s+am\s+i\s+going|do\s+i\s+have|is\s+there)\b.*\b(?:flight|trip|dominican|travel|destination)\b", re.IGNORECASE)
+CENTER_CALENDAR_CHECK_PATTERN = re.compile(r"^\s*check\s+(?:my\s+)?calendar\s+(?:for\s+)?tomorrow[?.!]*\s*$", re.IGNORECASE)
 
 
 def _is_morning_protocol_trigger(user_text: str) -> bool:
@@ -115,11 +120,67 @@ def _durable_calendar_facts(text: str, now=None) -> list[tuple[str, str, str]]:
     return facts
 
 
+def _zach_memory_candidate(text: str) -> dict[str, object] | None:
+    if not ZACH_MEMORY_CALENDAR_PATTERN.search(text):
+        return None
+    event_date = personal_calendar.resolve_calendar_date(text)
+    if event_date is None:
+        return None
+    return {
+        "category": "personal",
+        "content": f"Sam plans to attend Zach Bryan at Gillette Stadium on {event_date.strftime('%B')} {event_date.day}, {event_date.year}.",
+        "importance": 4,
+        "metadata": {"memory_key": f"plan:zach-bryan-gillette-{event_date.isoformat()}", "explicit": True},
+    }
+
+
+def _calendar_and_memory_lookup(user_text: str) -> str:
+    context = orchestration.request_context(user_text, action="calendar_and_memory_read", target="google_calendar")
+    try:
+        calendar_reply = personal_calendar.handle_personal_calendar_request(user_text)
+    except Exception:
+        calendar_reply = "I couldn't reach your personal Google Calendar."
+    try:
+        remembered = memory.recall(user_text, limit=4)
+    except Exception:
+        return f"Calendar (Google Calendar):\n{calendar_reply}\n\nRemembered context (Sam 2): unavailable."
+    memory_lines = [str(item.get("content", "")) for item in remembered if item.get("content")]
+    memory_reply = "No relevant remembered context." if not memory_lines else "\n".join(f"- {line}" for line in memory_lines)
+    return f"Calendar (Google Calendar):\n{calendar_reply}\n\nRemembered context (Sam 2):\n{memory_reply}"
+
+
+def _center_calendar_reply(result: object) -> str:
+    if not isinstance(result, dict):
+        return "Center returned an invalid calendar result."
+    payload = result.get("result")
+    if not isinstance(payload, dict):
+        return "Center did not return a calendar result."
+    events = payload.get("events")
+    if not isinstance(events, list):
+        return "Center did not return a calendar event list."
+    if not events:
+        return "Your Google Calendar is clear tomorrow."
+    return "Google Calendar tomorrow:\n" + "\n".join(
+        f"- {event.get('title', '(untitled event)')}" for event in events if isinstance(event, dict)
+    )
+
+
 def process_message(user_text: str) -> str:
     """Process and log one user message through Sheila's existing workflow."""
     prior_text = memory.get_latest_user_text() if CALENDAR_FOLLOWUP_PATTERN.search(user_text) else None
     effective_text = f"{prior_text}\n{user_text}" if prior_text else user_text
     lowered = effective_text.lower()
+    if CENTER_CALENDAR_CHECK_PATTERN.match(user_text):
+        context = orchestration.request_context(user_text, action="calendar_read", target="center")
+        result = orchestration.execute_with_center(context, "calendar_read", "Check my calendar for tomorrow.")
+        reply = (_center_calendar_reply(result.result) if result.status == "succeeded"
+                 else "Center could not complete the calendar check.")
+        memory.log_exchange(user_text, reply, important=False)
+        return reply
+    if CALENDAR_MEMORY_LOOKUP_PATTERN.search(user_text) or EXISTING_TRAVEL_CONTEXT_PATTERN.search(user_text):
+        reply = _calendar_and_memory_lookup(user_text)
+        memory.log_exchange(user_text, reply, important=False)
+        return reply
     route = route_request(effective_text)
     explicit_memory = _extract_explicit_memory(effective_text)
     if explicit_memory:
@@ -149,7 +210,14 @@ def process_message(user_text: str) -> str:
     else:
         followup_match = FOLLOWUP_PATTERN.search(effective_text)
         reply = _handle_followup(followup_match.group(1).strip()) if followup_match and not route.capability else str(handle_request(effective_text, response_handler=brain.think)["response"])
-    if MIXED_MEMORY_CALENDAR_PATTERN.search(effective_text) and "couldn't" not in reply.lower() and "please specify" not in reply.lower():
+    zach_candidate = _zach_memory_candidate(effective_text)
+    if zach_candidate and ("added" in reply.lower() or "already on your personal google calendar" in reply.lower()):
+        context = orchestration.request_context(user_text, action="durable_memory_write", target="sam2")
+        memory_result = orchestration.persist_memory_candidate(context, zach_candidate)
+        reply += (" I also saved that plan to Sam 2."
+                  if memory_result.status == "succeeded"
+                  else " The calendar result is confirmed, but I couldn't save the memory to Sam 2.")
+    elif MIXED_MEMORY_CALENDAR_PATTERN.search(effective_text) and "couldn't" not in reply.lower() and "please specify" not in reply.lower():
         facts = _durable_calendar_facts(effective_text)
         for category, content, key in facts:
             memory.remember(category, content, source="user", importance=4, metadata={"explicit": True, "memory_key": key})

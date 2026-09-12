@@ -193,7 +193,7 @@ def _operational_create(text: str, current: datetime) -> str | None:
             return "Please specify what I should remind you about."
         operational_store.create_reminder(reminder_text, due, config.SHEILA_TIMEZONE, user_id=config.SHEILA_USER_ID)
         return f"Reminder set: {reminder_text}."
-    match = re.search(r"\bremind me\s+(?:to|about)\s+(.+)$", text, re.IGNORECASE)
+    match = re.search(r"\b(?:remind me\s+(?:to|about)|reminder\s*:)\s+(.+)$", text, re.IGNORECASE)
     if not match:
         pending = operational_store.take_pending(config.SHEILA_USER_ID, current)
         if not pending:

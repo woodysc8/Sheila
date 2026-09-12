@@ -29,6 +29,14 @@ TRAVEL_TERMS = (
     "travel", "trip", "flight", "flights", "hotel", "itinerary",
     "vacation", "holiday", "airbnb", "airport", "destination",
 )
+TRAVEL_OPERATION_PATTERN = re.compile(
+    r"\b(?:search|find|compare|book|recommend|build|plan|change|modify|cancel)\b.*\b(?:flight|flights|hotel|hotels|trip|travel|itinerary)\b",
+    re.IGNORECASE,
+)
+EXISTING_TRAVEL_INFO_PATTERN = re.compile(
+    r"\b(?:do\s+i\s+have|when\s+am\s+i\s+going|is\s+there|what\s+(?:flight|trip))\b.*\b(?:flight|trip|travel|dominican|destination)\b",
+    re.IGNORECASE,
+)
 RESEARCH_TERMS = (
     "research", "deep research", "research report", "analyze",
     "analysis", "compare", "presentation", "briefing deck", "market study",
@@ -74,7 +82,7 @@ GMAIL_FOLLOWUP_PATTERN = re.compile(r"\bwhat did\s+[\w .'-]+\s+say\??$")
 DRIVE_RELATIONSHIP_PATTERN = re.compile(r"\b(?:which|what|who)\b.*\bclients?\b|\bcompanies\s+are\s+clients\b|\b(?:does|do)\b.*\bserve\b")
 ASANA_TASK_PATTERN = re.compile(r"\bwhat\s+(?:tasks?|do i)\b.*\bdue\s+today\b|\bwhat\s+do\s+i\s+have\s+due\s+today\b")
 REMINDER_REQUEST_PATTERN = re.compile(
-    r"\bremind me\s+(?:to|about|in\s+(?:(?:an?|\d+)\s+)?(?:seconds?|minutes?|hours?)\s+to)\b|\b(?:cancel|complete|finish|mark|move|change|update)\s+(?:my\s+)?(?:reminder|task)\b|"
+    r"\bremind me\s+(?:to|about|in\s+(?:(?:an?|\d+)\s+)?(?:seconds?|minutes?|hours?)\s+to)\b|\breminder\s*:|\b(?:cancel|complete|finish|mark|move|change|update)\s+(?:my\s+)?(?:reminder|task)\b|"
     r"\b(?:what are my reminders|list my reminders|show my reminders|what do i need to get done)\b",
     re.IGNORECASE,
 )
@@ -105,7 +113,9 @@ def route_request(user_text: str) -> RoutingDecision:
     is_non_calendar_mutation = any(term in normalized for term in non_calendar_mutation_terms)
     is_tentative_or_historical = PERSONAL_PLAN_EXCLUSION_PATTERN.search(normalized)
     is_generic_calendar_request = _matches(normalized, CALENDAR_TERMS)
-    if (PERSONAL_CALENDAR_EXISTENCE_PATTERN.search(normalized) or
+    if (EXISTING_TRAVEL_INFO_PATTERN.search(normalized) or
+            ("weekend" in normalized and "month" in normalized and "coming up" in normalized) or
+            PERSONAL_CALENDAR_EXISTENCE_PATTERN.search(normalized) or
             _matches(normalized, PERSONAL_CALENDAR_TERMS) or
             ("calendar" in normalized and re.search(r"\b(?:add|put|commit|save|remember)\b", normalized)) or
             (PERSONAL_CALENDAR_LOOKUP_PATTERN.search(normalized) and not is_generic_calendar_request) or
@@ -129,7 +139,7 @@ def route_request(user_text: str) -> RoutingDecision:
             delegation_ready=False,
             reason="This appears to be a financial or tax request for Richard once available.",
         )
-    if _matches(normalized, TRAVEL_TERMS):
+    if _matches(normalized, TRAVEL_TERMS) and TRAVEL_OPERATION_PATTERN.search(normalized):
         return RoutingDecision(
             agent="Travel",
             intent="travel_planning_or_research",
