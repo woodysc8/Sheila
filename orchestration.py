@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from uuid import uuid4
 from typing import Any
 
@@ -26,6 +27,44 @@ _CENTER_SPECIALISTS = {
     "Travel": "juan_whey",
     "Richard": "richard",
 }
+
+# Juan's Center adapter is intentionally a non-user-facing stub today.  This
+# explicit state makes Travel a known execution candidate without activating
+# it in Sheila's conversational workflow.
+TRAVEL_SPECIALIST_EXECUTION_ENABLED = False
+
+
+@dataclass(frozen=True)
+class SpecialistExecutionDecision:
+    """Sheila's explicit readiness decision after deterministic routing."""
+
+    routed_agent: str
+    is_specialist_candidate: bool
+    may_execute: bool
+    reason: str
+
+
+def specialist_execution_decision(routed_agent: str) -> SpecialistExecutionDecision:
+    """Decide whether an already-routed specialist may execute now."""
+    if routed_agent == "Travel":
+        if TRAVEL_SPECIALIST_EXECUTION_ENABLED:
+            return SpecialistExecutionDecision(
+                "Travel", True, True, "Travel specialist execution is enabled."
+            )
+        return SpecialistExecutionDecision(
+            "Travel", True, False, "Travel specialist execution is disabled while Juan remains a stub."
+        )
+    if routed_agent == "Richard":
+        return SpecialistExecutionDecision(
+            "Richard", True, False, "Richard remains a future specialist."
+        )
+    if routed_agent == "Sheila":
+        return SpecialistExecutionDecision(
+            "Sheila", False, False, "This request remains with Sheila."
+        )
+    return SpecialistExecutionDecision(
+        routed_agent, False, False, "No executable specialist is registered for this route."
+    )
 
 
 def request_context(user_text: str, *, action: str, target: str,
@@ -116,6 +155,31 @@ def delegate_routed_travel_with_memory(
         routed_agent,
         task,
         relevant_context=relevant_context,
+        constraints=constraints,
+        authority_scope=authority_scope,
+    )
+
+
+def execute_routed_specialist_if_ready(
+    context: RequestContext,
+    routed_agent: str,
+    task: str,
+    *,
+    constraints: tuple[str, ...] = (),
+    authority_scope: str = "read",
+) -> ExecutionResult | None:
+    """Execute only a Sheila-approved, currently enabled specialist route.
+
+    ``None`` means the caller must retain its normal Sheila fallback.  The
+    current Travel state is disabled, so this does not expose Juan's stub.
+    """
+    decision = specialist_execution_decision(routed_agent)
+    if not decision.may_execute:
+        return None
+    return delegate_routed_travel_with_memory(
+        context,
+        routed_agent,
+        task,
         constraints=constraints,
         authority_scope=authority_scope,
     )
