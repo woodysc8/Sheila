@@ -24,6 +24,37 @@ _RELATIVE_DURATION_PATTERN = re.compile(
 )
 
 
+def is_reminder_intent(user_text: str) -> bool:
+    """Recognize explicit reminder requests without borrowing calendar intent."""
+    return bool(re.search(
+        r"\bremind\s+me\b|\breminders?\b|"
+        r"\b(?:cancel|complete|finish|mark|move|change|update)\s+(?:my\s+)?task\b|"
+        r"\bwhat\s+do\s+i\s+need\s+to\s+get\s+done\b",
+        user_text,
+        re.IGNORECASE,
+    ))
+
+
+def _is_reminder_listing(text: str) -> bool:
+    return bool(re.search(
+        r"\b(?:what\s+(?:are\s+my\s+)?reminders?|what\s+reminders\s+do\s+i\s+have|"
+        r"show(?:\s+me)?\s+(?:my\s+)?reminders?|list\s+(?:my\s+)?reminders?|"
+        r"what\s+do\s+i\s+need\s+to\s+get\s+done)\b",
+        text,
+        re.IGNORECASE,
+    ))
+
+
+def _reminder_creation_body(text: str) -> str | None:
+    match = re.search(
+        r"\b(?:remind\s+me\s+(?:to|about)\s+|reminder\s*:\s*|"
+        r"(?:add|create|set)\s+(?:a\s+)?reminder\s+(?:(?:to|about)\s+)?)\s*(.+)$",
+        text,
+        re.IGNORECASE,
+    )
+    return match.group(1) if match else None
+
+
 def _zone() -> ZoneInfo:
     return config.get_sheila_timezone()
 
@@ -122,7 +153,7 @@ def _reminder_text(body: str) -> str:
     value = re.sub(r"\b(?:today|tomorrow|tmw)\b", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\b(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\b(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", "", value, flags=re.IGNORECASE)
-    value = re.sub(r"\b(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm|in\s+the\s+morning)\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bat\s+\d{1,2}(?::\d{2})?(?:\s*(?:am|pm|in\s+the\s+morning))?\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm|in\s+the\s+morning)\b", "", value, flags=re.IGNORECASE)
     value = _RELATIVE_DURATION_PATTERN.sub("", value)
     return re.sub(r"\s+", " ", value).strip(" ,.-")
 
@@ -178,9 +209,38 @@ def _due_day_label(due: datetime, current: datetime) -> str:
     return f"on {due.strftime('%B')} {due.day}"
 
 
-def _default_confirmation(due: datetime, day: str) -> str:
+def _default_confirmation(due: datetime, day: str, reminder_text: str) -> str:
     human_time = due.strftime("%I:%M %p").lstrip("0")
-    return f"Got it. I'll remind you {day} at {human_time}."
+    return f"Reminder set for {day} at {human_time}: {reminder_text}."
+
+
+def _listing_date(text: str, current: datetime) -> tuple[str | None, str | None]:
+    due = _date_from_text(text, current)
+    if due is None:
+        return None, None
+    if due == current.date():
+        return due.isoformat(), "today"
+    if due == current.date() + timedelta(days=1):
+        return due.isoformat(), "tomorrow"
+    return due.isoformat(), due.strftime("%A")
+
+
+def _operational_list_response(text: str, current: datetime) -> str:
+    due_date, label = _listing_date(text, current)
+    items = operational_store.list_reminders(config.SHEILA_USER_ID)
+    if due_date:
+        items = [item for item in items if datetime.fromisoformat(str(item["due_at"])).astimezone(_zone()).date().isoformat() == due_date]
+    if not items:
+        return f"No reminders scheduled for {label}." if label else "No pending reminders."
+    return "Reminders:\n" + "\n".join(f"- {item['text']} ({item['due_at']})" for item in items)
+
+
+def _fallback_list_response(text: str, current: datetime) -> str:
+    due_date, label = _listing_date(text, current)
+    tasks = list_tasks(due_date=due_date)
+    if not tasks:
+        return f"No reminders scheduled for {label}." if label else "No pending reminders."
+    return "Reminders:\n" + "\n".join(_format_task(task) for task in tasks)
 
 
 def _operational_create(text: str, current: datetime) -> str | None:
@@ -193,8 +253,8 @@ def _operational_create(text: str, current: datetime) -> str | None:
             return "Please specify what I should remind you about."
         operational_store.create_reminder(reminder_text, due, config.SHEILA_TIMEZONE, user_id=config.SHEILA_USER_ID)
         return f"Reminder set: {reminder_text}."
-    match = re.search(r"\b(?:remind me\s+(?:to|about)|reminder\s*:)\s+(.+)$", text, re.IGNORECASE)
-    if not match:
+    body = _reminder_creation_body(text)
+    if body is None:
         pending = operational_store.take_pending(config.SHEILA_USER_ID, current)
         if not pending:
             return None
@@ -205,7 +265,6 @@ def _operational_create(text: str, current: datetime) -> str | None:
         due = datetime.combine(date.fromisoformat(pending["due_date"]), reminder_time, tzinfo=_zone())
         operational_store.create_reminder(pending["text"], due, pending["timezone"], user_id=config.SHEILA_USER_ID)
         return f"Reminder set: {pending['text']}."
-    body = match.group(1)
     reminder_text = _reminder_text(body)
     monthly = re.search(r"\bon\s+the\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s+and\s+(\d{1,2})(?:st|nd|rd|th)?)?\s+every\s+month\b", body, re.IGNORECASE)
     if monthly:
@@ -225,14 +284,14 @@ def _operational_create(text: str, current: datetime) -> str | None:
                 return "Please specify when I should remind you."
             due = _next_time_due(reminder_time, current)
             operational_store.create_reminder(reminder_text, due, config.SHEILA_TIMEZONE, user_id=config.SHEILA_USER_ID)
-            return _default_confirmation(due, _due_day_label(due, current))
+            return _default_confirmation(due, _due_day_label(due, current), reminder_text)
         due = _default_due(current)
         operational_store.create_reminder(reminder_text, due, config.SHEILA_TIMEZONE, user_id=config.SHEILA_USER_ID)
-        return _default_confirmation(due, _due_day_label(due, current))
+        return _default_confirmation(due, _due_day_label(due, current), reminder_text)
     if due_at is None:
         due = datetime.combine(date.fromisoformat(due_date), time(9), tzinfo=_zone())
         operational_store.create_reminder(reminder_text, due, config.SHEILA_TIMEZONE, user_id=config.SHEILA_USER_ID)
-        return _default_confirmation(due, _due_day_label(due, current))
+        return _default_confirmation(due, _due_day_label(due, current), reminder_text)
     operational_store.create_reminder(reminder_text, datetime.fromisoformat(due_at), config.SHEILA_TIMEZONE, user_id=config.SHEILA_USER_ID)
     return f"Reminder set: {reminder_text}."
 
@@ -323,12 +382,11 @@ def handle_request(user_text: str, now: datetime | None = None) -> str:
             if due_date is None: return "Please specify the new reminder date."
             operational_store.update_reminder(item["id"], due_at=datetime.fromisoformat(due_at) if due_at else datetime.combine(date.fromisoformat(due_date), time(9), tzinfo=_zone()))
             return f"Updated reminder: {item['text']}."
+        if _is_reminder_listing(text):
+            return _operational_list_response(text, current)
         result = _operational_create(text, current)
         if result is not None:
             return result
-        if re.search(r"\b(?:what are my reminders|list my reminders|show my reminders)\b", lowered):
-            items = operational_store.list_reminders()
-            return "No pending reminders." if not items else "Reminders:\n" + "\n".join(f"- {item['text']} ({item['due_at']})" for item in items)
         return "I couldn't identify a reminder request."
     if re.search(r"\b(?:maybe|might|may|should i|thinking about|if)\b", lowered):
         return "I didn't create a reminder because that sounded tentative."
@@ -359,16 +417,18 @@ def handle_request(user_text: str, now: datetime | None = None) -> str:
             return "I need the exact reminder to complete."
         set_status(int(matches[0]["id"]), "completed")
         return f"Completed reminder: {matches[0]['text']}."
-    if re.search(r"\b(?:what do i need to get done|what needs to get done|what are my reminders|list my reminders|show my reminders)\b", lowered):
-        due_date = current.date().isoformat() if "today" in lowered else None
-        tasks = list_tasks(due_date=due_date)
-        return "No pending reminders." if not tasks else "Reminders:\n" + "\n".join(_format_task(task) for task in tasks)
-    create_match = re.search(r"\bremind me to\s+(.+)$", text, re.IGNORECASE)
-    if create_match:
-        reminder_text = re.sub(r"\b(?:today|tomorrow|this|next|monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b", "", create_match.group(1), flags=re.IGNORECASE)
-        due_date, due_at = _parse_due(create_match.group(1), current)
+    if _is_reminder_listing(text):
+        return _fallback_list_response(text, current)
+    body = _reminder_creation_body(text)
+    if body is not None:
+        reminder_text = _reminder_text(body)
+        due_date, due_at = _parse_due(body, current)
         if due_date is None:
             return "Please specify when I should remind you."
-        task = create(reminder_text.strip(" ,"), due_date, due_at)
+        if due_at is None:
+            due = datetime.combine(date.fromisoformat(due_date), time(9), tzinfo=_zone())
+            task = create(reminder_text, due_date, due.isoformat())
+            return _default_confirmation(due, _due_day_label(due, current), task["text"])
+        task = create(reminder_text, due_date, due_at)
         return f"Reminder set: {task['text']}."
     return "I couldn't identify a reminder request."

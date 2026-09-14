@@ -7,6 +7,8 @@ model client or attempt to call planned agents.
 from dataclasses import asdict, dataclass
 import re
 
+from sheila_tasks import is_reminder_intent
+
 
 @dataclass(frozen=True)
 class RoutingDecision:
@@ -85,11 +87,6 @@ FREE_TIME_PATTERN = re.compile(r"\bfree\b.*\b(?:monday|tuesday|wednesday|thursda
 GMAIL_FOLLOWUP_PATTERN = re.compile(r"\bwhat did\s+[\w .'-]+\s+say\??$")
 DRIVE_RELATIONSHIP_PATTERN = re.compile(r"\b(?:which|what|who)\b.*\bclients?\b|\bcompanies\s+are\s+clients\b|\b(?:does|do)\b.*\bserve\b")
 ASANA_TASK_PATTERN = re.compile(r"\bwhat\s+(?:tasks?|do i)\b.*\bdue\s+today\b|\bwhat\s+do\s+i\s+have\s+due\s+today\b")
-REMINDER_REQUEST_PATTERN = re.compile(
-    r"\bremind me\s+(?:to|about|in\s+(?:(?:an?|\d+)\s+)?(?:seconds?|minutes?|hours?)\s+to)\b|\breminder\s*:|\b(?:cancel|complete|finish|mark|move|change|update)\s+(?:my\s+)?(?:reminder|task)\b|"
-    r"\b(?:what are my reminders|list my reminders|show my reminders|what do i need to get done)\b",
-    re.IGNORECASE,
-)
 REMINDER_TIME_REPLY_PATTERN = re.compile(r"^\s*(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm|in\s+the\s+morning)?\s*[.!]?\s*$", re.IGNORECASE)
 OPERATIONAL_SUMMARY_PATTERN = re.compile(r"\bwhat needs to get done(?: today)?\b", re.IGNORECASE)
 
@@ -109,7 +106,7 @@ def route_request(user_text: str) -> RoutingDecision:
         return RoutingDecision("Sheila", "asana_read", False, "This request needs read-only Asana data.", "asana")
     if OPERATIONAL_SUMMARY_PATTERN.search(normalized):
         return RoutingDecision("Sheila", "operational_summary", False, "This request needs Sheila's operational task and calendar summary.", "operational_summary")
-    if REMINDER_REQUEST_PATTERN.search(normalized) and not PERSONAL_PLAN_EXCLUSION_PATTERN.search(normalized):
+    if is_reminder_intent(user_text) and not PERSONAL_PLAN_EXCLUSION_PATTERN.search(normalized):
         return RoutingDecision("Sheila", "sheila_task", False, "This request needs Sheila's reminder and task store.", "sheila_task")
     if REMINDER_TIME_REPLY_PATTERN.match(user_text):
         return RoutingDecision("Sheila", "sheila_task", False, "This may complete Sheila's pending reminder.", "sheila_task")

@@ -39,7 +39,7 @@ class SheilaTaskTests(unittest.TestCase):
         sheila_tasks.handle_request("Remind me to bring my passport Thursday.", NOW)
         date_only = next(task for task in sheila_tasks.list_tasks() if task["text"] == "bring my passport")
         self.assertEqual(date_only["due_date"], "2026-09-10")
-        self.assertIsNone(date_only["due_at"])
+        self.assertIn("T09:00:00-04:00", date_only["due_at"])
 
         sheila_tasks.handle_request("Mark my reminder call Mom done.", NOW)
         completed = sheila_tasks.list_tasks(status="completed")
@@ -53,6 +53,26 @@ class SheilaTaskTests(unittest.TestCase):
         self.assertIn("didn't create", response)
         self.assertEqual(sheila_tasks.list_tasks(), [])
         self.assertEqual(route_request("Maybe remind me to call Mom tomorrow.").capability, None)
+
+    def test_fallback_recognizes_reminder_creation_and_date_filtered_listing(self):
+        for text in (
+            "Reminder: call Mom tomorrow",
+            "Add a reminder to buy groceries Saturday",
+            "Create a reminder to pay rent Friday",
+            "Set a reminder to call Mom tomorrow",
+            "Reminder: dinner with Nora Friday at 7",
+        ):
+            self.assertEqual(route_request(text).capability, "sheila_task")
+            self.assertIn("Reminder set", sheila_tasks.handle_request(text, NOW))
+        tomorrow = sheila_tasks.handle_request("What reminders do I have tomorrow?", NOW)
+        friday = sheila_tasks.handle_request("What reminders do I have Friday?", NOW)
+        self.assertIn("call Mom", tomorrow)
+        self.assertNotIn("pay rent", tomorrow)
+        self.assertIn("pay rent", friday)
+        self.assertIn("dinner with Nora", friday)
+        self.assertEqual(sheila_tasks.handle_request("What reminders do I have today?", NOW), "No reminders scheduled for today.")
+        self.assertIn("Reminders:", sheila_tasks.handle_request("Show my reminders", NOW))
+        self.assertIn("Reminders:", sheila_tasks.handle_request("List my reminders", NOW))
 
     def test_combined_calendar_lookup_separates_personal_and_timed_work(self):
         brain = Mock()

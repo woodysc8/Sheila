@@ -36,6 +36,29 @@ class OperationalReminderTests(unittest.TestCase):
         self.assertIn("tomorrow at 9:00 AM", response)
         self.assertIn("2026-09-11T09:00:00", operational_store.list_reminders()[0]["due_at"])
 
+    def test_operational_mode_accepts_natural_reminder_forms_and_filters_lists(self):
+        cases = (
+            ("Remind me to call Mom tomorrow at 3", "call Mom", "2026-09-11T15:00:00"),
+            ("Reminder: call Mom tomorrow", "call Mom", "2026-09-11T09:00:00"),
+            ("Add a reminder to buy groceries Saturday", "buy groceries", "2026-09-12T09:00:00"),
+            ("Create a reminder to pay rent Friday", "pay rent", "2026-09-11T09:00:00"),
+            ("Set a reminder to call Mom tomorrow", "call Mom", "2026-09-11T09:00:00"),
+            ("Reminder: dinner with Nora Friday at 7", "dinner with Nora", "2026-09-11T19:00:00"),
+        )
+        for text, expected_text, expected_due in cases:
+            self.assertEqual(route_request(text).capability, "sheila_task")
+            self.assertIn(expected_text, sheila_tasks.handle_request(text, NOW))
+            self.assertTrue(any(item["text"] == expected_text and item["due_at"].startswith(expected_due)
+                                for item in operational_store.list_reminders()))
+        tomorrow = sheila_tasks.handle_request("What reminders do I have tomorrow?", NOW)
+        self.assertIn("call Mom", tomorrow)
+        self.assertNotIn("buy groceries", tomorrow)
+        self.assertEqual(sheila_tasks.handle_request("What reminders do I have today?", NOW), "No reminders scheduled for today.")
+        self.assertIn("buy groceries", sheila_tasks.handle_request("What reminders do I have Saturday?", NOW))
+        self.assertIn("Reminders:", sheila_tasks.handle_request("What reminders do I have?", NOW))
+        self.assertIn("Reminders:", sheila_tasks.handle_request("Show me my reminders", NOW))
+        self.assertIn("Reminders:", sheila_tasks.handle_request("List my reminders", NOW))
+
     def test_undated_reminder_two_hour_default_time_boundaries(self):
         cases = (
             ((10, 0), "2026-09-10T12:00:00", "today at 12:00 PM"),

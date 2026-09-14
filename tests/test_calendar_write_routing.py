@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import calendar_store
 import personal_calendar
 from agents.router import RoutingDecision
+from agents.router import route_request
 from agents.workflow import handle_request
 
 
@@ -80,6 +81,25 @@ class CalendarWriteRoutingTests(unittest.TestCase):
         create.assert_not_called()
         self.assertNotEqual(result["route"].get("capability"), "personal_calendar")
         llm.assert_called_once()
+
+    def test_explicit_reminder_never_reaches_personal_calendar(self):
+        llm = Mock(return_value="generic fallback")
+        with patch.object(personal_calendar, "handle_personal_calendar_request") as calendar_request, \
+             patch("agents.workflow.sheila_tasks.handle_request", return_value="Reminder set: buy groceries.") as reminder_request:
+            result = handle_request("Add a reminder to buy groceries Saturday", llm)
+        self.assertEqual(result["route"]["capability"], "sheila_task")
+        calendar_request.assert_not_called()
+        reminder_request.assert_called_once()
+        self.assertIn("Reminder", result["response"])
+
+    def test_reminder_prefix_beats_calendar_while_calendar_command_still_routes_normally(self):
+        with patch.object(personal_calendar, "handle_personal_calendar_request") as calendar_request, \
+             patch("agents.workflow.sheila_tasks.handle_request", return_value="Reminder set: dinner with Nora."):
+            result = handle_request("Reminder: dinner with Nora Friday at 7", Mock())
+        self.assertEqual(result["route"]["capability"], "sheila_task")
+        calendar_request.assert_not_called()
+        self.assertEqual(route_request("Put dinner with Nora on my calendar Friday").capability, "personal_calendar")
+        self.assertEqual(route_request("Add dinner with Nora to my calendar Friday").capability, "personal_calendar")
 
     def test_forced_generic_fallback_cannot_claim_unverified_calendar_write(self):
         llm = Mock(return_value="I've added the event to your calendar.")
