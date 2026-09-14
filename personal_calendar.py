@@ -42,6 +42,13 @@ _AMBIGUOUS_EVENT_ORDINAL_PATTERN = re.compile(
 _TRIP_DESTINATION_ALIASES: tuple[tuple[str, ...], ...] = (
     ("dominican republic", "santo domingo", "punta cana", "sdq"),
 )
+_TRIP_INFORMATION_PATTERN = re.compile(
+    r"\b(?:when\s+(?:am\s+i\s+going|is\s+my\s+trip|do\s+i\s+fly|do\s+i\s+leave|do\s+i\s+come\s+back)|"
+    r"do\s+i\s+have|what\s+(?:dates|flights?|are\s+my\s+plans|do\s+i\s+have\s+planned)|"
+    r"when\s+do\s+i\s+(?:fly|leave|come\s+back|return)|"
+    r"(?:my\s+)?(?:trip|travel)\s+dates?)\b",
+    re.IGNORECASE,
+)
 
 
 def _log(operation: str, **details: object) -> None:
@@ -76,6 +83,15 @@ def _trip_destination_aliases(user_text: str) -> tuple[str, ...] | None:
     if re.search(r"\bdr\b", normalized):
         return _TRIP_DESTINATION_ALIASES[0]
     return None
+
+
+def is_existing_trip_information_request(user_text: str) -> bool:
+    """Whether a destination question asks for planned-calendar information.
+
+    This deliberately recognizes retrieval language only.  Search, booking,
+    comparison, and planning requests remain future Travel-specialist work.
+    """
+    return _trip_destination_aliases(user_text) is not None and bool(_TRIP_INFORMATION_PATTERN.search(user_text))
 
 
 def find_existing_trip_events(user_text: str, now: datetime | None = None) -> list[dict[str, object]] | None:
@@ -118,6 +134,45 @@ def format_existing_trip_events(events: list[dict[str, object]]) -> str:
             timing = str(event.get("start") or "unknown time")
         lines.append(f"- {title} — {timing}" + (f" — {location}" if location else ""))
     return "Personal Google Calendar:\n" + "\n".join(lines)
+
+
+def _event_start(event: dict[str, object]) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(event["start"]).replace("Z", "+00:00")).astimezone(_zone())
+    except (KeyError, ValueError):
+        return None
+
+
+def _flight_place(event: dict[str, object], *, arrival: bool) -> str | None:
+    """Read a flight endpoint only when Calendar supplies it."""
+    text = " ".join(str(event.get(field) or "") for field in ("title", "location", "description"))
+    route = re.search(r"\b(BOS|SDQ)\b\s*(?:→|->|to)\s*\b(BOS|SDQ)\b", text, re.IGNORECASE)
+    if route:
+        code = route.group(2 if arrival else 1).upper()
+        return {"BOS": "Boston", "SDQ": "Santo Domingo"}[code]
+    destination = re.search(r"\bflight\s+to\s+([\w .'-]+?)(?:\s*\(|$)", str(event.get("title") or ""), re.IGNORECASE)
+    return destination.group(1).strip() if arrival and destination else None
+
+
+def format_existing_trip_information(events: list[dict[str, object]]) -> str:
+    """Answer an existing-trip question from matched Google Calendar events."""
+    timed = [(event, _event_start(event)) for event in events]
+    timed = [(event, start) for event, start in timed if start is not None]
+    if not timed:
+        return "I couldn't find matching Dominican Republic trip events on your personal Google Calendar."
+    timed.sort(key=lambda item: item[1])
+    outbound, outbound_start = timed[0]
+    return_event, return_start = (timed[-1] if len(timed) > 1 else (None, None))
+    outbound_destination = _flight_place(outbound, arrival=True) or "the Dominican Republic"
+    outbound_origin = _flight_place(outbound, arrival=False)
+    outbound_phrase = f"You fly" + (f" from {outbound_origin}" if outbound_origin else "") + f" to {outbound_destination} on {outbound_start.strftime('%B')} {outbound_start.day} at {_display_time(outbound_start)}"
+    if return_event is None:
+        return f"I found one matching trip event. {outbound_phrase}."
+    return_destination = _flight_place(return_event, arrival=True)
+    return_phrase = f" and return" + (f" to {return_destination}" if return_destination else "") + f" {return_start.strftime('%B')} {return_start.day} at {_display_time(return_start)}"
+    return (f"You're going to the Dominican Republic {outbound_start.strftime('%B')} {outbound_start.day}"
+            f"–{return_start.day if outbound_start.month == return_start.month else return_start.strftime('%B') + ' ' + str(return_start.day)}. "
+            f"{outbound_phrase}{return_phrase}.")
 
 
 def create_personal_calendar_event(title: str, start: datetime, end: datetime,

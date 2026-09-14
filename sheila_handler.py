@@ -27,11 +27,6 @@ CALENDAR_FOLLOWUP_PATTERN = re.compile(r"\b(?:add|put|commit|save)\s+(?:all\s+of
 MIXED_MEMORY_CALENDAR_PATTERN = re.compile(r"\b(?:memory|remember|deep memory)\b.*\bcalendar\b|\bcalendar\b.*\b(?:memory|remember|deep memory)\b", re.IGNORECASE)
 ZACH_MEMORY_CALENDAR_PATTERN = re.compile(r"\bzach\s+bryan\b.*\bremember\b|\bremember\b.*\bzach\s+bryan\b", re.IGNORECASE)
 CALENDAR_MEMORY_LOOKUP_PATTERN = re.compile(r"\b(?:what(?:'s| is) on|what do i have).*(?:calendar).*\b(?:what i said|remind me what)\b", re.IGNORECASE)
-EXISTING_TRAVEL_CONTEXT_PATTERN = re.compile(
-    r"\b(?:when\s+am\s+i\s+going|do\s+i\s+have|is\s+there|when\s+is\s+my\s+trip|what\s+(?:are|do)\s+my\s+plans|what\s+do\s+i\s+have\s+planned)\b"
-    r".*\b(?:flight|trip|travel|dominican\s+republic|dr|santo\s+domingo|punta\s+cana|sdq)\b",
-    re.IGNORECASE,
-)
 CENTER_CALENDAR_CHECK_PATTERN = re.compile(r"^\s*check\s+(?:my\s+)?calendar\s+(?:for\s+)?tomorrow[?.!]*\s*$", re.IGNORECASE)
 
 
@@ -142,7 +137,7 @@ def _calendar_and_memory_lookup(user_text: str) -> str:
     context = orchestration.request_context(user_text, action="calendar_and_memory_read", target="google_calendar")
     try:
         trip_events = personal_calendar.find_existing_trip_events(user_text)
-        calendar_reply = (personal_calendar.format_existing_trip_events(trip_events)
+        calendar_reply = (personal_calendar.format_existing_trip_information(trip_events)
                           if trip_events is not None
                           else personal_calendar.handle_personal_calendar_request(user_text))
     except Exception:
@@ -194,7 +189,7 @@ def process_message(user_text: str) -> str:
                  else "Center could not complete the calendar check.")
         memory.log_exchange(user_text, reply, important=False)
         return reply
-    if CALENDAR_MEMORY_LOOKUP_PATTERN.search(user_text) or EXISTING_TRAVEL_CONTEXT_PATTERN.search(user_text):
+    if CALENDAR_MEMORY_LOOKUP_PATTERN.search(user_text) or personal_calendar.is_existing_trip_information_request(user_text):
         reply = _calendar_and_memory_lookup(user_text)
         memory.log_exchange(user_text, reply, important=False)
         return reply

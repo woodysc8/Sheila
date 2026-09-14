@@ -30,12 +30,15 @@ TRAVEL_TERMS = (
     "vacation", "holiday", "airbnb", "airport", "destination",
 )
 TRAVEL_OPERATION_PATTERN = re.compile(
-    r"\b(?:search|find|compare|book|recommend|build|plan|change|modify|cancel)\b.*\b(?:flight|flights|hotel|hotels|trip|travel|itinerary)\b",
+    r"\b(?:search|find|compare|book|recommend|build|plan|change|modify|cancel)\b.*\b(?:flight|flights|hotel|hotels|trip|travel|itinerary)\b|"
+    r"\bwhat\s+is\s+the\s+cheapest\s+way\s+to\s+get\s+to\b",
     re.IGNORECASE,
 )
 EXISTING_TRAVEL_INFO_PATTERN = re.compile(
-    r"\b(?:do\s+i\s+have|when\s+am\s+i\s+going|is\s+there|what\s+(?:flight|trip)|when\s+is\s+my\s+trip|what\s+(?:are|do)\s+my\s+plans|what\s+do\s+i\s+have\s+planned)\b"
-    r".*\b(?:flight|trip|travel|dominican\s+republic|dr|santo\s+domingo|punta\s+cana|sdq)\b",
+    r"(?=.*\b(?:flight|trip|travel|dominican\s+republic|dr|santo\s+domingo|punta\s+cana|sdq)\b)"
+    r".*\b(?:when\s+(?:am\s+i\s+going|is\s+my\s+trip|do\s+i\s+fly|do\s+i\s+leave|do\s+i\s+come\s+back)|"
+    r"do\s+i\s+have|what\s+(?:dates|flights?|are\s+my\s+plans|do\s+i\s+have\s+planned)|"
+    r"when\s+do\s+i\s+(?:fly|leave|come\s+back|return)|(?:my\s+)?(?:trip|travel)\s+dates?)\b",
     re.IGNORECASE,
 )
 RESEARCH_TERMS = (

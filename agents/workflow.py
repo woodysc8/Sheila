@@ -305,7 +305,11 @@ def google_data_node(state: SheilaWorkflowState) -> dict[str, str]:
     user_text = state["user_text"]
     try:
         if capability == "personal_calendar":
-            response = personal_calendar.handle_personal_calendar_request(user_text)
+            trip_events = (personal_calendar.find_existing_trip_events(user_text)
+                           if personal_calendar.is_existing_trip_information_request(user_text) else None)
+            response = (personal_calendar.format_existing_trip_information(trip_events)
+                        if trip_events is not None
+                        else personal_calendar.handle_personal_calendar_request(user_text))
             if (_is_natural_calendar_lookup(user_text) and "personal calendar" not in user_text.lower()
                     and "weekend" not in user_text.lower()):
                 start, end = _calendar_range(user_text)
