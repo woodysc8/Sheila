@@ -10,7 +10,7 @@ import center_adapter
 import config
 import memory
 import personal_calendar
-from sam2_memory_client import Sam2MemoryClient
+from sam2_memory_client import Sam2MemoryClient, Sam2MemorySearchError
 from orchestration_contract import (
     ExecutionRequest,
     ExecutionResult,
@@ -65,6 +65,59 @@ def retrieve_relevant_memory(
         memory_key=memory_key,
         sort=sort,
         limit=limit,
+    )
+
+
+def _travel_memory_context(memories: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Select the small preference/fact shape Juan may use for this request."""
+    selected: list[dict[str, str]] = []
+    for memory_record in memories[:6]:
+        content = memory_record.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        item = {"content": content}
+        category = memory_record.get("category")
+        if isinstance(category, str) and category.strip():
+            item["category"] = category
+        selected.append(item)
+    return selected
+
+
+def delegate_routed_travel_with_memory(
+    context: RequestContext,
+    routed_agent: str,
+    task: str,
+    *,
+    constraints: tuple[str, ...] = (),
+    authority_scope: str = "read",
+) -> ExecutionResult:
+    """Explicitly prepare a routed Travel task with bounded Sam 2 context.
+
+    This is intentionally not part of the general conversational workflow
+    while Juan remains a stub.  It is the eventual Travel execution boundary
+    after Sheila has already selected the Travel specialist.
+    """
+    if routed_agent != "Travel":
+        return ExecutionResult(
+            context.request_id,
+            "failed",
+            authoritative_source="sheila",
+            errors=("Travel memory preparation requires a Travel routing decision.",),
+        )
+    try:
+        memories = retrieve_relevant_memory(query=task, category="travel", limit=6)
+    except Sam2MemorySearchError:
+        logger.warning("travel_memory_retrieval request_id=%s status=unavailable", context.request_id)
+        relevant_context: dict[str, Any] = {}
+    else:
+        relevant_context = {"memory_context": _travel_memory_context(memories)}
+    return delegate_routed_specialist_with_center(
+        context,
+        routed_agent,
+        task,
+        relevant_context=relevant_context,
+        constraints=constraints,
+        authority_scope=authority_scope,
     )
 
 
