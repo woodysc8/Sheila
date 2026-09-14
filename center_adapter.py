@@ -36,6 +36,7 @@ _CENTER_MODULE_NAMES = (
     "classifier",
     "delegation",
     "execution",
+    "specialist_delegation",
     "specialists",
     "capabilities",
 )

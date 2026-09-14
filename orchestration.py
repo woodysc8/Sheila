@@ -10,10 +10,21 @@ import center_adapter
 import config
 import memory
 import personal_calendar
-from orchestration_contract import ExecutionRequest, ExecutionResult, RequestContext
+from orchestration_contract import (
+    ExecutionRequest,
+    ExecutionResult,
+    RequestContext,
+    SpecialistDelegationRequest,
+)
 
 
 logger = logging.getLogger(__name__)
+
+
+_CENTER_SPECIALISTS = {
+    "Travel": "juan_whey",
+    "Richard": "richard",
+}
 
 
 def request_context(user_text: str, *, action: str, target: str,
@@ -63,6 +74,50 @@ def execute_with_center(context: RequestContext, capability: str, task: str,
         authoritative_source = "center"
     logger.info("center_result request_id=%s status=succeeded source=%s", context.request_id, authoritative_source)
     return ExecutionResult(context.request_id, "succeeded", outcome, authoritative_source)
+
+
+def delegate_routed_specialist_with_center(
+    context: RequestContext,
+    routed_agent: str,
+    task: str,
+    *,
+    relevant_context: dict[str, Any] | None = None,
+    constraints: tuple[str, ...] = (),
+    authority_scope: str = "read",
+) -> ExecutionResult:
+    """Hand an already-selected specialist request to Center's fixed boundary.
+
+    Sheila retains the routing decision.  Only the context explicitly supplied
+    to this call crosses the boundary; request conversation state and Sam 2
+    recall stay in Sheila.
+    """
+    specialist = _CENTER_SPECIALISTS.get(routed_agent)
+    if specialist is None:
+        return ExecutionResult(
+            context.request_id,
+            "failed",
+            authoritative_source="center",
+            errors=(f"No structured Center specialist is registered for {routed_agent}.",),
+        )
+    request = SpecialistDelegationRequest(
+        request_id=context.request_id,
+        specialist=specialist,
+        task=task,
+        relevant_context=dict(relevant_context or {}),
+        constraints=constraints,
+        authority_scope=authority_scope,
+    )
+    logger.info("center_specialist_delegation request_id=%s specialist=%s", context.request_id, specialist)
+    try:
+        outcome = center_adapter.submit_execution_task(request.to_center_task())
+    except center_adapter.CenterError as exc:
+        logger.warning("center_specialist_result request_id=%s status=failed", context.request_id)
+        return ExecutionResult(context.request_id, "failed", authoritative_source="center", errors=(str(exc),))
+    status = str(outcome.get("status", "failed")).lower() if isinstance(outcome, dict) else "failed"
+    if status not in {"succeeded", "done", "success"}:
+        return ExecutionResult(context.request_id, "failed", outcome, "center", errors=("Center did not confirm specialist delegation.",))
+    logger.info("center_specialist_result request_id=%s status=succeeded specialist=%s", context.request_id, specialist)
+    return ExecutionResult(context.request_id, "succeeded", outcome, "center")
 
 
 def persist_memory_candidate(context: RequestContext, candidate: dict[str, Any]) -> ExecutionResult:

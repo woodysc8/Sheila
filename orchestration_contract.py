@@ -46,6 +46,31 @@ class ExecutionRequest:
 
 
 @dataclass(frozen=True)
+class SpecialistDelegationRequest:
+    """A Sheila-selected, non-persistent request for a Center specialist."""
+
+    request_id: str
+    specialist: str
+    task: str
+    relevant_context: dict[str, Any] = field(default_factory=dict)
+    constraints: tuple[str, ...] = ()
+    authority_scope: str = "read"
+
+    def to_center_task(self) -> dict[str, Any]:
+        """Adapt to Center's existing narrow Python interface."""
+        return {
+            "raw_input": self.task,
+            "context": self.relevant_context,
+            "metadata": {
+                "request_id": self.request_id,
+                "specialist": self.specialist,
+                "authority_scope": self.authority_scope,
+                "constraints": list(self.constraints),
+            },
+        }
+
+
+@dataclass(frozen=True)
 class ExecutionResult:
     request_id: str
     status: Status

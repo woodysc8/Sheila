@@ -12,7 +12,7 @@ class CenterAdapterTests(unittest.TestCase):
         requirements = (Path(__file__).resolve().parents[1] /
                         "requirements-center-runtime.txt").read_text(encoding="utf-8")
         self.assertIn(
-            "center @ git+https://github.com/woodysc8/Center.git@1d81c89bd3d4a76c674d50d9bb4f79eb05a3cf66",
+            "center @ git+https://github.com/woodysc8/Center.git@1dbe5e0",
             requirements,
         )
         self.assertNotIn("@github.com:", requirements)
