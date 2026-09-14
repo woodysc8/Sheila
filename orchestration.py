@@ -10,6 +10,7 @@ import center_adapter
 import config
 import memory
 import personal_calendar
+from sam2_memory_client import Sam2MemoryClient
 from orchestration_contract import (
     ExecutionRequest,
     ExecutionResult,
@@ -41,6 +42,30 @@ def request_context(user_text: str, *, action: str, target: str,
     )
     logger.info("orchestration_request_received request_id=%s action=%s target=%s", context.request_id, action, target)
     return context
+
+
+def retrieve_relevant_memory(
+    *,
+    query: str = "",
+    category: str | None = None,
+    source: str | None = None,
+    memory_key: str | None = None,
+    sort: str = "relevance",
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Explicitly retrieve a bounded set of durable Sam 2 context records.
+
+    Callers choose when memory is relevant.  This helper neither persists data
+    nor attaches results to Center or a specialist request automatically.
+    """
+    return Sam2MemoryClient().search(
+        query,
+        category=category,
+        source=source,
+        memory_key=memory_key,
+        sort=sort,
+        limit=limit,
+    )
 
 
 def execute_with_center(context: RequestContext, capability: str, task: str,
