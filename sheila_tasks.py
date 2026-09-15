@@ -52,7 +52,15 @@ def _reminder_creation_body(text: str) -> str | None:
         text,
         re.IGNORECASE,
     )
-    return match.group(1) if match else None
+    if match:
+        return match.group(1)
+    # Preserve a leading date/time clause so the normal due parser sees it.
+    scheduled = re.search(
+        r"\bremind\s+me\s+((?:today|tomorrow|tmw)(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?)\s+(?:to|about)\s+(.+)$",
+        text,
+        re.IGNORECASE,
+    )
+    return f"{scheduled.group(1)} {scheduled.group(2)}" if scheduled else None
 
 
 def _zone() -> ZoneInfo:

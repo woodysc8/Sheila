@@ -23,6 +23,7 @@ MEETING_END_PHRASES = ["meeting's over", "meeting is over", "i'm out of my meeti
 FOLLOWUP_PATTERN = re.compile(r"what did ([\w\s]+?) (say|email|write|send)", re.IGNORECASE)
 EMAIL_QUERY_PATTERN = re.compile(r"(email|emails|mail)(s)?\s+(from|received|i received|i got|today|that came in)", re.IGNORECASE)
 MORNING_PROTOCOL_PATTERN = re.compile(r"(?:good\s+morning|morning)(?:\s+sheila)?[!,.?]*", re.IGNORECASE)
+SAM2_MEMORY_LOOKUP_PATTERN = re.compile(r"\bwhat\s+does\s+sam\s*2\s+know\s+about\s+me\b", re.IGNORECASE)
 CALENDAR_FOLLOWUP_PATTERN = re.compile(r"\b(?:add|put|commit|save)\s+(?:all\s+of\s+)?(?:that|this|it)\b.*\bcalendar\b", re.IGNORECASE)
 MIXED_MEMORY_CALENDAR_PATTERN = re.compile(r"\b(?:memory|remember|deep memory)\b.*\bcalendar\b|\bcalendar\b.*\b(?:memory|remember|deep memory)\b", re.IGNORECASE)
 ZACH_MEMORY_CALENDAR_PATTERN = re.compile(r"\bzach\s+bryan\b.*\bremember\b|\bremember\b.*\bzach\s+bryan\b", re.IGNORECASE)
@@ -151,6 +152,18 @@ def _calendar_and_memory_lookup(user_text: str) -> str:
     return f"Calendar (Google Calendar):\n{calendar_reply}\n\nRemembered context (Sam 2):\n{memory_reply}"
 
 
+def _sam2_memory_lookup() -> str:
+    """Return the user's durable-memory inventory without involving the model."""
+    try:
+        remembered = memory.recall(limit=10)
+    except Exception:
+        return "Sam 2 is unavailable right now."
+    lines = [str(item.get("content", "")) for item in remembered if item.get("content")]
+    return "Sam 2 has no saved information about you yet." if not lines else "Sam 2 knows:\n" + "\n".join(
+        f"- {line}" for line in lines
+    )
+
+
 def _center_calendar_reply(result: object) -> str:
     if not isinstance(result, dict):
         return "Center returned an invalid calendar result."
@@ -191,6 +204,10 @@ def process_message(user_text: str) -> str:
         return reply
     if CALENDAR_MEMORY_LOOKUP_PATTERN.search(user_text) or personal_calendar.is_existing_trip_information_request(user_text):
         reply = _calendar_and_memory_lookup(user_text)
+        memory.log_exchange(user_text, reply, important=False)
+        return reply
+    if SAM2_MEMORY_LOOKUP_PATTERN.search(user_text):
+        reply = _sam2_memory_lookup()
         memory.log_exchange(user_text, reply, important=False)
         return reply
     route = route_request(effective_text)

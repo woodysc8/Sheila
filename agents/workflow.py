@@ -311,7 +311,8 @@ def google_data_node(state: SheilaWorkflowState) -> dict[str, str]:
                         if trip_events is not None
                         else personal_calendar.handle_personal_calendar_request(user_text))
             if (_is_natural_calendar_lookup(user_text) and "personal calendar" not in user_text.lower()
-                    and "weekend" not in user_text.lower()):
+                    and "weekend" not in user_text.lower() and
+                    not re.search(r"\bexclude\s+work\b", user_text, re.IGNORECASE)):
                 start, end = _calendar_range(user_text)
                 try:
                     work = calendar.get_events(start, end, limit=20)
