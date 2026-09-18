@@ -2,13 +2,14 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
 import calendar_store
 import config
 import operational_store
 import reminder_worker
+import sheila_handler
 import sheila_tasks
 from agents.router import route_request
 from migrate_operational_state import migrate
@@ -16,9 +17,34 @@ from migrate_operational_state import migrate
 
 ET = ZoneInfo("America/New_York")
 NOW = datetime(2026, 9, 10, 12, tzinfo=ET)
+SEPTEMBER_18 = datetime(2026, 9, 18, 12, tzinfo=ET)
+
+
+class _September18Clock(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return SEPTEMBER_18.astimezone(tz) if tz else SEPTEMBER_18.replace(tzinfo=None)
 
 
 class OperationalReminderTests(unittest.TestCase):
+    def test_production_weekday_day_of_month_reminders_keep_date_and_body(self):
+        llm = Mock(return_value="generic answer")
+        requests = (
+            "Set a reminder for Tuesday the 29th to follow up with Mysric RIA",
+            "Remind me Tuesday the 29th to follow up with Mysric RIA",
+        )
+        with patch.object(sheila_tasks, "datetime", _September18Clock), \
+             patch.object(sheila_handler.memory, "log_exchange"), \
+             patch.object(sheila_handler.brain, "think", llm):
+            replies = [sheila_handler.process_message(request) for request in requests]
+
+        reminders = operational_store.list_reminders()
+        self.assertEqual([item["text"] for item in reminders], ["follow up with Mysric RIA"] * 2)
+        self.assertTrue(all(item["due_at"].startswith("2026-09-29T09:00:00") for item in reminders))
+        self.assertTrue(all("Tuesday, September 29" in reply for reply in replies))
+        self.assertTrue(all("for the 29th" not in item["text"] for item in reminders))
+        llm.assert_not_called()
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.url = "sqlite:///" + os.path.join(self.tmp.name, "operational.db")
         self.patch = patch.object(operational_store.config, "SHEILA_OPERATIONAL_DATABASE_URL", self.url); self.patch.start()

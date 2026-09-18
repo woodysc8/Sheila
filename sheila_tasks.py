@@ -47,8 +47,8 @@ def _is_reminder_listing(text: str) -> bool:
 
 def _reminder_creation_body(text: str) -> str | None:
     match = re.search(
-        r"\b(?:remind\s+me\s+(?:to|about)\s+|reminder\s*:\s*|"
-        r"(?:add|create|set)\s+(?:a\s+)?reminder\s+(?:(?:to|about)\s+)?)\s*(.+)$",
+        r"\b(?:remind\s+me\s+(?:(?:to|about)\s+)?|reminder\s*:\s*|"
+        r"(?:add|create|set)\s+(?:a\s+)?reminder\s+(?:(?:to|about|for)\s+)?)\s*(.+)$",
         text,
         re.IGNORECASE,
     )
@@ -160,10 +160,11 @@ def _reminder_text(body: str) -> str:
     value = re.sub(r"\bon\s+the\s+\d{1,2}(?:st|nd|rd|th)?(?:\s+and\s+\d{1,2}(?:st|nd|rd|th)?)?\s+every\s+month\b", "", body, flags=re.IGNORECASE)
     value = re.sub(r"\b(?:today|tomorrow|tmw)\b", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\b(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\b(?:on\s+|for\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:the\s+)?\d{1,2}(?:st|nd|rd|th)?\b", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\b(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\bat\s+\d{1,2}(?::\d{2})?(?:\s*(?:am|pm|in\s+the\s+morning))?\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm|in\s+the\s+morning)\b", "", value, flags=re.IGNORECASE)
     value = _RELATIVE_DURATION_PATTERN.sub("", value)
-    return re.sub(r"\s+", " ", value).strip(" ,.-")
+    return re.sub(r"^\s*(?:to|about)\s+", "", re.sub(r"\s+", " ", value)).strip(" ,.-")
 
 
 def _next_monthly_due(day: int, current: datetime) -> datetime:
@@ -214,7 +215,7 @@ def _due_day_label(due: datetime, current: datetime) -> str:
         return "today"
     if due.date() == current.date() + timedelta(days=1):
         return "tomorrow"
-    return f"on {due.strftime('%B')} {due.day}"
+    return f"{due.strftime('%A, %B')} {due.day}"
 
 
 def _default_confirmation(due: datetime, day: str, reminder_text: str) -> str:

@@ -278,6 +278,10 @@ _EXPLICIT_DATE = re.compile(
     rf"\b(?:on\s+)?(?P<month>{_MONTHS})\s+(?P<day>\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s*(?P<year>\d{{4}}))?\b",
     re.IGNORECASE,
 )
+_WEEKDAY_DAY_OF_MONTH = re.compile(
+    rf"\b(?:on\s+)?(?P<weekday>{'|'.join(_WEEKDAYS)})\s+(?:the\s+)?(?P<day>\d{{1,2}})(?:st|nd|rd|th)?\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -317,6 +321,22 @@ def resolve_calendar_date(text: str, now: datetime | None = None) -> date | None
         if explicit.group("year") is None and parsed < current.date():
             parsed = parsed.replace(year=parsed.year + 1)
         return parsed
+    weekday_day = _WEEKDAY_DAY_OF_MONTH.search(text)
+    if weekday_day:
+        weekday = _WEEKDAYS[weekday_day.group("weekday").lower()]
+        day = int(weekday_day.group("day"))
+        for month_offset in range(25):
+            month_index = current.month - 1 + month_offset
+            year, month = current.year + month_index // 12, month_index % 12 + 1
+            try:
+                candidate = date(year, month, day)
+            except ValueError:
+                continue
+            if candidate >= current.date() and candidate.weekday() == weekday:
+                return candidate
+        # Do not discard the day of month and silently reinterpret this as a
+        # bare weekday when the stated weekday/date combination is invalid.
+        return None
     for name, weekday in _WEEKDAYS.items():
         if re.search(rf"\b(?:this|next)\s+{name}\b", lowered):
             if re.search(rf"\bnext\s+{name}\b", lowered):
@@ -620,6 +640,8 @@ def _weekend_events_response(text: str, now: datetime) -> str:
                    f"(interpreting ‘next {count} months’ from today):")
     else:
         days_until_saturday = (5 - now.weekday()) % 7
+        if "next weekend" in text.lower():
+            days_until_saturday += 7
         weekend_start = now.date() + timedelta(days=days_until_saturday)
         start = datetime.combine(weekend_start, time.min, tzinfo=_zone())
         end = start + timedelta(days=2)

@@ -11,9 +11,44 @@ import sheila_tasks
 
 
 NOW = datetime(2026, 9, 12, 12, tzinfo=ZoneInfo("America/New_York"))
+SEPTEMBER_18 = datetime(2026, 9, 18, 12, tzinfo=ZoneInfo("America/New_York"))
+
+
+class _September18Clock(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return SEPTEMBER_18.astimezone(tz) if tz else SEPTEMBER_18.replace(tzinfo=None)
 
 
 class CalendarQueryQualityTests(unittest.TestCase):
+    def test_production_weekend_queries_use_deterministic_personal_calendar(self):
+        events = [
+            {"id": "sat", "title": "Saturday hike", "start": "2026-09-19T09:00:00-04:00", "end": "2026-09-19T10:00:00-04:00", "all_day": False},
+            {"id": "sat", "title": "Saturday hike", "start": "2026-09-19T09:00:00-04:00", "end": "2026-09-19T10:00:00-04:00", "all_day": False},
+            {"id": "sun", "title": "Sunday brunch", "start": "2026-09-20T11:00:00-04:00", "end": "2026-09-20T12:00:00-04:00", "all_day": False},
+            {"id": "weekday", "title": "Weekday meeting", "start": "2026-09-21T09:00:00-04:00", "end": "2026-09-21T10:00:00-04:00", "all_day": False},
+            {"id": "nov", "title": "November market", "start": "2026-11-14T09:00:00-04:00", "end": "2026-11-14T10:00:00-04:00", "all_day": False},
+        ]
+        llm = MagicMock(return_value="generic answer")
+        with patch.object(personal_calendar, "datetime", _September18Clock), \
+             patch.object(personal_calendar, "get_personal_calendar_events", return_value=events) as read, \
+             patch.object(sheila_handler.memory, "log_exchange"), \
+             patch.object(sheila_handler.brain, "think", llm):
+            this_weekend = sheila_handler.process_message("What do I have on my calendar for this weekend")
+            next_two_months = sheila_handler.process_message("What weekend events do I have for the next two months?")
+
+        self.assertEqual(route_request("What do I have on my calendar for this weekend").capability, "personal_calendar")
+        self.assertEqual(route_request("What weekend events do I have for the next two months?").capability, "personal_calendar")
+        self.assertIn("Saturday, September 19", this_weekend)
+        self.assertIn("Sunday, September 20", this_weekend)
+        self.assertNotIn("Weekday meeting", this_weekend)
+        self.assertEqual(this_weekend.count("Saturday hike"), 1)
+        self.assertIn("November market", next_two_months)
+        self.assertNotIn("Weekday meeting", next_two_months)
+        self.assertLess(next_two_months.index("Saturday hike"), next_two_months.index("November market"))
+        self.assertEqual(read.call_count, 2)
+        llm.assert_not_called()
+
     def test_this_weekend_is_bounded_grouped_and_deduplicated_without_work_merge(self):
         events = [
             {"id": "sat", "title": "Saturday hike", "start": "2026-09-12T09:00:00-04:00", "end": "2026-09-12T10:00:00-04:00", "all_day": False},
@@ -41,6 +76,13 @@ class CalendarQueryQualityTests(unittest.TestCase):
         start, end = workflow._calendar_range("What am I doing this weekend?", NOW)
         self.assertEqual(start, datetime(2026, 9, 12, tzinfo=ZoneInfo("America/New_York")))
         self.assertEqual(end, datetime(2026, 9, 14, tzinfo=ZoneInfo("America/New_York")))
+
+    def test_next_weekend_starts_the_following_saturday(self):
+        with patch.object(personal_calendar, "get_personal_calendar_events", return_value=[]) as read:
+            personal_calendar.handle_personal_calendar_request("What am I doing next weekend?", SEPTEMBER_18)
+        start, end = read.call_args.args
+        self.assertEqual(start.date().isoformat(), "2026-09-26")
+        self.assertEqual(end.date().isoformat(), "2026-09-28")
 
     def test_next_two_month_weekends_filters_deduplicates_sorts_and_groups(self):
         events = [

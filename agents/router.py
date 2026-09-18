@@ -115,6 +115,8 @@ def route_request(user_text: str) -> RoutingDecision:
     is_tentative_or_historical = PERSONAL_PLAN_EXCLUSION_PATTERN.search(normalized)
     is_generic_calendar_request = _matches(normalized, CALENDAR_TERMS)
     if (EXISTING_TRAVEL_INFO_PATTERN.search(normalized) or
+            ("weekend" in normalized and (PERSONAL_CALENDAR_LOOKUP_PATTERN.search(normalized) or
+                                          re.search(r"\b(?:what|show|which)\b", normalized))) or
             ("weekend" in normalized and "month" in normalized and "coming up" in normalized) or
             PERSONAL_CALENDAR_EXISTENCE_PATTERN.search(normalized) or
             _matches(normalized, PERSONAL_CALENDAR_TERMS) or
