@@ -32,6 +32,8 @@ class OperationalReminderTests(unittest.TestCase):
         requests = (
             "Set a reminder for Tuesday the 29th to follow up with Mysric RIA",
             "Remind me Tuesday the 29th to follow up with Mysric RIA",
+            "Set a reminder for Tuesday, September 29 to follow up with Mysric RIA",
+            "Remind me on September 29 to follow up with Mysric RIA",
         )
         with patch.object(sheila_tasks, "datetime", _September18Clock), \
              patch.object(sheila_handler.memory, "log_exchange"), \
@@ -39,7 +41,7 @@ class OperationalReminderTests(unittest.TestCase):
             replies = [sheila_handler.process_message(request) for request in requests]
 
         reminders = operational_store.list_reminders()
-        self.assertEqual([item["text"] for item in reminders], ["follow up with Mysric RIA"] * 2)
+        self.assertEqual([item["text"] for item in reminders], ["follow up with Mysric RIA"] * 4)
         self.assertTrue(all(item["due_at"].startswith("2026-09-29T09:00:00") for item in reminders))
         self.assertTrue(all("Tuesday, September 29" in reply for reply in replies))
         self.assertTrue(all("for the 29th" not in item["text"] for item in reminders))

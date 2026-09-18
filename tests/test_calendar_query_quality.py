@@ -47,6 +47,10 @@ class CalendarQueryQualityTests(unittest.TestCase):
         self.assertNotIn("Weekday meeting", next_two_months)
         self.assertLess(next_two_months.index("Saturday hike"), next_two_months.index("November market"))
         self.assertEqual(read.call_count, 2)
+        self.assertEqual(read.call_args_list[0].args[0].date().isoformat(), "2026-09-19")
+        self.assertEqual(read.call_args_list[0].args[1].date().isoformat(), "2026-09-21")
+        self.assertEqual(read.call_args_list[1].args[0].date().isoformat(), "2026-09-18")
+        self.assertEqual(read.call_args_list[1].args[1].date().isoformat(), "2026-11-18")
         llm.assert_not_called()
 
     def test_this_weekend_is_bounded_grouped_and_deduplicated_without_work_merge(self):

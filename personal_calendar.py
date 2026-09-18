@@ -278,6 +278,10 @@ _EXPLICIT_DATE = re.compile(
     rf"\b(?:on\s+)?(?P<month>{_MONTHS})\s+(?P<day>\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s*(?P<year>\d{{4}}))?\b",
     re.IGNORECASE,
 )
+_WEEKDAY_EXPLICIT_DATE = re.compile(
+    rf"\b(?:on\s+)?(?P<weekday>{'|'.join(_WEEKDAYS)})\s*,?\s+(?P<month>{_MONTHS})\s+(?P<day>\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s*(?P<year>\d{{4}}))?\b",
+    re.IGNORECASE,
+)
 _WEEKDAY_DAY_OF_MONTH = re.compile(
     rf"\b(?:on\s+)?(?P<weekday>{'|'.join(_WEEKDAYS)})\s+(?:the\s+)?(?P<day>\d{{1,2}})(?:st|nd|rd|th)?\b",
     re.IGNORECASE,
@@ -310,6 +314,21 @@ def resolve_calendar_date(text: str, now: datetime | None = None) -> date | None
         return current.date()
     if "tomorrow" in lowered:
         return current.date() + timedelta(days=1)
+    weekday_explicit = _WEEKDAY_EXPLICIT_DATE.search(text)
+    if weekday_explicit:
+        weekday = _WEEKDAYS[weekday_explicit.group("weekday").lower()]
+        month = datetime.strptime(weekday_explicit.group("month"), "%B").month
+        day = int(weekday_explicit.group("day"))
+        years = [int(weekday_explicit.group("year"))] if weekday_explicit.group("year") else range(current.year, current.year + 9)
+        for year in years:
+            try:
+                candidate = date(year, month, day)
+            except ValueError:
+                return None
+            if candidate >= current.date() and candidate.weekday() == weekday:
+                return candidate
+        # Never accept a month/day while disregarding its accompanying weekday.
+        return None
     explicit = _EXPLICIT_DATE.search(text)
     if explicit:
         year = int(explicit.group("year") or current.year)
